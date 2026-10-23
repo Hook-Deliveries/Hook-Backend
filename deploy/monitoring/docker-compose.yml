@@ -73,7 +73,7 @@ services:
     environment:
       BREVO_API_KEY: ${BREVO_API_KEY}
       ALERT_FROM: ${ALERT_FROM}
-      ALERT_TO: hook.africa2025@gmail.com,ogunseitangold105@gmail.com
+      ALERT_TO: ${ALERT_TO:?set ALERT_TO in deploy/monitoring/.env}
     volumes:
       - ./alert-mailer/server.js:/app/server.js:ro
     restart: unless-stopped
