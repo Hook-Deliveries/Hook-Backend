@@ -8,9 +8,12 @@ x-app: &app
     PORT: "4000"
     WORKER_IN_PROCESS: "false"
     REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    EVENT_BUS_URL: amqp://hook:${RABBITMQ_PASSWORD}@rabbitmq:5672
   restart: unless-stopped
   depends_on:
     redis:
+      condition: service_healthy
+    rabbitmq:
       condition: service_healthy
   volumes:
     - uploads:/app/uploads
@@ -35,6 +38,71 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 512M }
+
+  consumer-payments:
+    <<: *app
+    command: ["node", "dist/consumer.js"]
+    environment:
+      NODE_ENV: production
+      WORKER_IN_PROCESS: "false"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      EVENT_BUS_URL: amqp://hook:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      EVENT_DOMAIN: payments
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+
+  consumer-orders:
+    <<: *app
+    command: ["node", "dist/consumer.js"]
+    environment:
+      NODE_ENV: production
+      WORKER_IN_PROCESS: "false"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      EVENT_BUS_URL: amqp://hook:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      EVENT_DOMAIN: orders
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+
+  consumer-fulfilment:
+    <<: *app
+    command: ["node", "dist/consumer.js"]
+    environment:
+      NODE_ENV: production
+      WORKER_IN_PROCESS: "false"
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      EVENT_BUS_URL: amqp://hook:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      EVENT_DOMAIN: fulfilment
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: hook
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 10
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    networks: [backend]
+    deploy:
+      resources:
+        limits: { memory: 768M }
 
   redis:
     image: redis:7-alpine
@@ -70,6 +138,7 @@ services:
 volumes:
   uploads:
   redis-data:
+  rabbitmq-data:
 
 networks:
   backend:

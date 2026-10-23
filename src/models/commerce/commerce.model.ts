@@ -161,6 +161,7 @@ export interface CommerceOutboxEvent extends BaseEntity {
   firstFailedAt?: Date;
   lockedUntil?: Date;
   lockToken?: string;
+  dispatchedAt?: Date;
 }
 
 export interface IntegrationException extends BaseEntity {
@@ -388,6 +389,7 @@ const outboxSchema = createSchema<CommerceOutboxEvent>({
   firstFailedAt: { type: Date },
   lockedUntil: { type: Date, index: true },
   lockToken: { type: String, index: true, sparse: true },
+  dispatchedAt: { type: Date },
   deletedAt: { type: Date },
 });
 outboxSchema.index(

@@ -11,6 +11,7 @@ import { isDuplicateKeyError } from "@utils/http";
 export const OUTBOX_MAX_ATTEMPTS = 5;
 const LEASE_MS = 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
+const DISPATCH_RETRY_MS = 60_000;
 
 export type OutboxDraft = {
   aggregateType: "order" | "payment" | "refund";
@@ -84,32 +85,79 @@ export async function processOutbox(handlers: Partial<Record<OutboxEventType, Ou
   const results: unknown[] = [];
   if (!types.length) return results;
   for (let index = 0; index < limit; index += 1) {
-    const lockToken = randomUUID();
+    const run = await claimAndRun({ eventType: { $in: types } }, handlers);
+    if (!run.claimed) break;
+    if (run.ok) results.push(run.result);
+  }
+  return results;
+}
+
+export async function processOutboxEvent(publicId: string, handlers: Partial<Record<OutboxEventType, OutboxHandler>>) {
+  const run = await claimAndRun({ publicId, eventType: { $in: Object.keys(handlers) } }, handlers);
+  return run.claimed;
+}
+
+async function claimAndRun(match: Record<string, unknown>, handlers: Partial<Record<OutboxEventType, OutboxHandler>>) {
+  const lockToken = randomUUID();
+  const now = new Date();
+  const event = await CommerceOutboxEvent.findOneAndUpdate(
+    {
+      ...match,
+      $or: [
+        { status: "pending", availableAt: { $lte: now } },
+        { status: "processing", lockedUntil: { $lt: now } },
+      ],
+    } as any,
+    { $set: { status: "processing", lockToken, lockedUntil: new Date(Date.now() + LEASE_MS) }, $inc: { attempts: 1 } },
+    { sort: { availableAt: 1, createdAt: 1 }, returnDocument: "after" },
+  ).lean({ virtuals: true });
+  if (!event) return { claimed: false as const };
+  const handler = handlers[(event as any).eventType as OutboxEventType]!;
+  try {
+    const result = await handler(event);
+    await CommerceOutboxEvent.updateOne(
+      { _id: (event as any)._id, lockToken },
+      { $set: { status: "published", processedAt: new Date() }, $unset: { lockedUntil: 1, lockToken: 1, lastError: 1 } },
+    );
+    return { claimed: true as const, ok: true as const, result };
+  } catch (error) {
+    await failOutboxEvent(event as any, lockToken, error);
+    return { claimed: true as const, ok: false as const };
+  }
+}
+
+export async function dispatchDueOutbox(
+  publish: (event: { publicId: string; eventType: string }) => Promise<void>,
+  limit = 50,
+) {
+  let sent = 0;
+  while (sent < limit) {
     const now = new Date();
     const event = await CommerceOutboxEvent.findOneAndUpdate(
       {
-        eventType: { $in: types },
-        $or: [
-          { status: "pending", availableAt: { $lte: now } },
-          { status: "processing", lockedUntil: { $lt: now } },
+        $and: [
+          {
+            $or: [
+              { status: "pending", availableAt: { $lte: now } },
+              { status: "processing", lockedUntil: { $lt: now } },
+            ],
+          },
+          { $or: [{ dispatchedAt: { $exists: false } }, { dispatchedAt: { $lt: new Date(now.getTime() - DISPATCH_RETRY_MS) } }] },
         ],
       } as any,
-      { $set: { status: "processing", lockToken, lockedUntil: new Date(Date.now() + LEASE_MS) }, $inc: { attempts: 1 } },
-      { sort: { availableAt: 1, createdAt: 1 }, returnDocument: "after" },
-    ).lean({ virtuals: true });
+      { $set: { dispatchedAt: now } },
+      { sort: { availableAt: 1, createdAt: 1 }, returnDocument: "after", projection: { publicId: 1, eventType: 1 } },
+    ).lean();
     if (!event) break;
-    const handler = handlers[(event as any).eventType as OutboxEventType]!;
     try {
-      results.push(await handler(event));
-      await CommerceOutboxEvent.updateOne(
-        { _id: (event as any)._id, lockToken },
-        { $set: { status: "published", processedAt: new Date() }, $unset: { lockedUntil: 1, lockToken: 1, lastError: 1 } },
-      );
+      await publish({ publicId: (event as any).publicId, eventType: (event as any).eventType });
     } catch (error) {
-      await failOutboxEvent(event as any, lockToken, error);
+      await CommerceOutboxEvent.updateOne({ _id: (event as any)._id }, { $unset: { dispatchedAt: 1 } });
+      throw error;
     }
+    sent += 1;
   }
-  return results;
+  return sent;
 }
 
 async function failOutboxEvent(event: any, lockToken: string, error: unknown) {
@@ -126,7 +174,7 @@ async function failOutboxEvent(event: any, lockToken: string, error: unknown) {
         lastError: message,
         ...(event.firstFailedAt ? {} : { firstFailedAt: failedAt }),
       },
-      $unset: { lockedUntil: 1, lockToken: 1 },
+      $unset: { lockedUntil: 1, lockToken: 1, dispatchedAt: 1 },
     },
   );
   if (!exhausted || !updated.modifiedCount) return;

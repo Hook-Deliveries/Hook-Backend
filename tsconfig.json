@@ -39,6 +39,7 @@
     "src/app.ts",
     "src/server.ts",
     "src/worker.ts",
+    "src/consumer.ts",
     "src/jobs/**/*.ts",
     "src/types/**/*.d.ts",
     "src/config/data-source.ts",

@@ -14,7 +14,7 @@ if docker image inspect hook-api:latest >/dev/null 2>&1; then
   docker tag hook-api:latest hook-api:previous
 fi
 docker compose build api-1
-docker compose up -d redis
+docker compose up -d redis rabbitmq
 
 wait_healthy() {
   local id
@@ -31,7 +31,7 @@ rollback() {
   docker compose logs --tail=40 "$1" || true
   if docker image inspect hook-api:previous >/dev/null 2>&1; then
     docker tag hook-api:previous hook-api:latest
-    for s in api-1 api-2 api-3 worker; do docker compose up -d --no-deps --force-recreate "$s"; done
+    for s in api-1 api-2 api-3 worker consumer-payments consumer-orders consumer-fulfilment; do docker compose up -d --no-deps --force-recreate "$s"; done
   fi
   exit 1
 }
@@ -42,7 +42,7 @@ for s in api-1 api-2 api-3; do
   echo "ok  $s healthy"
 done
 
-docker compose up -d --no-deps --force-recreate worker
+docker compose up -d --no-deps --force-recreate worker consumer-payments consumer-orders consumer-fulfilment
 docker compose up -d nginx
 docker image prune -f >/dev/null
 echo "Deploy complete"
