@@ -1,5 +1,5 @@
 import { OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
-import { nextPublicIds } from '@services/public-id.service';
+import { nextPublicIds } from '@modules/platform/public-id.service';
 import {
   capitalForState,
   loadNigerianLocationCatalog,

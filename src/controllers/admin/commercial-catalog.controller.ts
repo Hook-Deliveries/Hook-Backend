@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ScopeType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
 import { CommercialCatalogService } from '@services/commercial-catalog.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { sendSuccess } from '@utils/http';
 import { presentCommercialSummary } from '@services/catalog-presentation.service';
 import { CatalogAvailabilityService } from '@services/catalog-availability.service';

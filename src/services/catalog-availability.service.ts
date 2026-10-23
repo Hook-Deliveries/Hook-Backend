@@ -4,7 +4,7 @@ import { Product } from '@models/products/product.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { byProductIdentifier } from '@services/catalog.service';
 import { MarketVendorService } from '@services/market-vendor.service';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { HttpError } from '@utils/http';
 
 function versionFilter(product: any, version: number) {

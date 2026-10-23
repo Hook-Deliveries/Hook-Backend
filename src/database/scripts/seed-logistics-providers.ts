@@ -1,6 +1,6 @@
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { LogisticsProvider } from '@models/logistics/logistics-provider.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 
 const execute = process.argv.includes('--execute');
 

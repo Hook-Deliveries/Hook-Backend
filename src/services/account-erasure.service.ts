@@ -21,7 +21,7 @@ import { AccountDeletionRequest } from '@models/support/account-deletion-request
 import { User } from '@models/users/user.model';
 import { restoreOrderIncentives } from '@services/order-restoration.service';
 import { AccountDeletionService, formatDeletionDate, sha256 } from '@services/account-deletion.service';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 
 /** Permanently removes a customer's personal data after the cooling-off window, atomically claimed and resumable step-by-step; financial records (orders, payments, refunds, ledger, audit logs) are kept with identity removed. */
 

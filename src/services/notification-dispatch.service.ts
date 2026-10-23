@@ -1,7 +1,7 @@
 import { Notification } from '@models/notifications/notification.model';
 import { User } from '@models/users/user.model';
 import { definitionFor, renderNotification, type NotificationGroup } from '../notifications/catalog';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { sendPushToUser } from '@services/push.service';
 
 export interface NotificationPreferences {

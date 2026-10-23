@@ -17,7 +17,7 @@ import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Market } from '@models/platform/network.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
-import { hookIdFromPublicId, nextPublicId } from './public-id.service';
+import { hookIdFromPublicId, nextPublicId } from '@modules/platform/public-id.service';
 import { CatalogMediaService } from './catalog-media.service';
 import { createCommerceNotification } from './commerce-notification.service';
 import { EmailService } from '@emails/email.service';

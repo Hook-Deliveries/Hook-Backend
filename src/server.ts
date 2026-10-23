@@ -4,11 +4,11 @@ import mongoose from 'mongoose';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
-import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.service';
+import { ensurePlatformAccessCatalog } from './modules/platform/platform-bootstrap.service';
 import { startInProcessJobs, stopInProcessJobs } from './jobs/in-process';
 import { assertRedisConfig, closeRedis, connectRedis, describeRedis, type RedisStatus } from './config/redis';
 import { closeWakeQueue } from './jobs/wake';
-import { realtime } from './services/realtime.service';
+import { realtime } from './modules/platform/realtime.service';
 
 dotenv.config({ quiet: true });
 

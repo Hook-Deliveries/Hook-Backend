@@ -4,7 +4,7 @@ import { NegotiationCommand } from '@models/negotiations/command.model';
 import { HttpError } from '@utils/http';
 import { NegotiationService, type NegotiationIdentity } from './negotiation.service';
 import { NegotiationShoppingService } from './negotiation-shopping.service';
-import { publishRealtime } from './realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { HookPartner } from '@models/platform/operations-accounts.model';
 import { withNegotiationExecution } from '@lib/negotiation-execution';
 

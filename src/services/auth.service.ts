@@ -23,7 +23,7 @@ import {
   rotateAccountSession,
   type SessionMetadata,
 } from './account-session.service';
-import { nextPublicId } from './public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { ReferralService } from './referral.service';
 import { CreditService } from './credit.service';
 

@@ -1,6 +1,7 @@
 import mongoose, { Model } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
-import { CheckoutPreview, CommerceOutboxEvent, IntegrationException, PaymentWebhookEvent, PodCallRecord, PodOverride } from '@models/commerce/commerce.model';
+import { CheckoutPreview, IntegrationException, PaymentWebhookEvent, PodCallRecord, PodOverride } from '@models/commerce/commerce.model';
+import { CommerceOutboxEvent } from '@modules/platform/outbox.model';
 import { Consolidation, FulfilmentRefund, FulfilmentTask, HubPackage, LogisticsWebhookEvent, PartnerCustody, PickupManifest, ReturnRequest, RunnerPackage, Shipment } from '@models/fulfilment/fulfilment.model';
 import { Logistics } from '@models/logistics/logistics.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';

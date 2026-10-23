@@ -1,5 +1,5 @@
-import type { OutboxEventType, } from "@models/commerce/commerce.model";
-import type { OutboxHandler } from "@services/outbox.service";
+import type { OutboxEventType } from "@modules/platform/outbox.model";
+import type { OutboxHandler } from "@modules/platform/outbox.service";
 
 /**
  * The single registry of outbox consumers. Loaded lazily by the worker (and by

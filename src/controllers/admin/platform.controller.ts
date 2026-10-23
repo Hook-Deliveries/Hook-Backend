@@ -22,11 +22,11 @@ import { clearStaleInvitationFor, purgeUnacceptedAccount } from '@services/stale
 import { FulfilmentTask, PartnerCustody } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
 import { ProductSubmission } from '@models/catalog/catalog.model';
-import { recordAudit } from '@services/platform-audit.service';
-import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@modules/platform/public-id.service';
 import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
-import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
-import { publishRealtime } from '@services/realtime.service';
+import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@modules/platform/platform-presentation.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { MarketVendorService } from '@services/market-vendor.service';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isDuplicateKeyError, HttpError, sendCreated, sendSuccess } from '@utils/http';

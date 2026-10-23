@@ -11,7 +11,7 @@ import {
 } from "@services/commercial-catalog.service";
 import { routeParam } from "@lib/api-utils";
 import { HttpError, sendSuccess } from "@utils/http";
-import { sharedCache } from "@services/cache.service";
+import { sharedCache } from "@modules/platform/cache.service";
 
 const PUBLIC_PRODUCT_CARD_FIELDS = [
   "publicId",

@@ -8,7 +8,7 @@ import { Notification } from '@models/notifications/notification.model';
 import { Broadcast } from '@models/notifications/broadcast.model';
 import { EmailService } from '@emails/email.service';
 import { sendPushMessages } from '@services/push.service';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { HttpError } from '@utils/http';
 
 export type CommunicationsAudience =

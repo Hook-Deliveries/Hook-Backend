@@ -5,7 +5,7 @@ import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { User } from '@models/users/user.model';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { routeParam } from './admin.helpers';
 

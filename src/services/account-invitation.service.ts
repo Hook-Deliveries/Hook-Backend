@@ -8,7 +8,7 @@ import { User } from '@models/users/user.model';
 import { HttpError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
-import { nextPublicId } from './public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { createCommerceNotification } from './commerce-notification.service';
 
 const email = new EmailService();

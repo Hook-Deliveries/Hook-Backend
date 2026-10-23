@@ -1,6 +1,6 @@
 import client from 'prom-client';
 import type { Request, Response } from 'express';
-import { CommerceOutboxEvent } from '@models/commerce/commerce.model';
+import { CommerceOutboxEvent } from '@modules/platform/outbox.model';
 
 client.collectDefaultMetrics();
 

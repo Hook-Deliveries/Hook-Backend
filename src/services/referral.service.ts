@@ -6,7 +6,7 @@ import { Referral } from '@models/promotions/referral.model';
 import { User } from '@models/users/user.model';
 import { CreditService } from '@services/credit.service';
 import { createCommerceNotification } from '@services/commerce-notification.service';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { HttpError } from '@utils/http';
 
 const DEFAULT_SIGNUP_BONUS_MINOR = 30000;

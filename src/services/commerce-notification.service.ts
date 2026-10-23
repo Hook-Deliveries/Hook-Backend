@@ -1,5 +1,5 @@
 import { Notification } from "@models/notifications/notification.model";
-import { publishRealtime } from "@services/realtime.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import { notifyPush } from "@services/push.service";
 import { definitionFor } from "../notifications/catalog";
 

@@ -5,7 +5,7 @@ import {
   OperationLocalGovernment,
   OperationState,
 } from "@models/platform/geography.model";
-import { nextPublicId } from "@services/public-id.service";
+import { nextPublicId } from "@modules/platform/public-id.service";
 import { HttpError } from "@utils/http";
 
 export type AddressInput = {

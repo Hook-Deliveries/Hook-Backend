@@ -38,14 +38,14 @@ import {
   calculateDeliveryPricing,
   resolveDeliveryState,
 } from "@services/delivery-pricing.service";
-import { nextPublicId } from "@services/public-id.service";
+import { nextPublicId } from "@modules/platform/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { EmailService } from "@emails/email.service";
 import { CouponService } from "@services/coupon.service";
 import { CreditService } from "@services/credit.service";
 import { LogisticsProviderService } from "@services/logistics-provider.service";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
-import { emitOutbox } from "@services/outbox.service";
+import { emitOutbox } from "@modules/platform/outbox.service";
 import { wakeOutbox } from "../jobs/wake";
 import { timelineEntry } from "@lib/order-timeline";
 import { defaultProviderName } from "@services/payments/provider-registry";

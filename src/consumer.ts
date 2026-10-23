@@ -2,10 +2,10 @@ import dotenv from 'dotenv';
 import { assertSafeEnvironment } from './config/env';
 import { assertRedisConfig, closeRedis, connectRedis } from './config/redis';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
-import { realtime } from './services/realtime.service';
-import { closeEventBus, consumeDomain, EVENT_DOMAINS, eventBusEnabled, type EventDomain } from './services/event-bus';
-import { processOutboxEvent } from './services/outbox.service';
-import { buildOutboxHandlers } from './services/outbox-handlers';
+import { realtime } from './modules/platform/realtime.service';
+import { closeEventBus, consumeDomain, EVENT_DOMAINS, eventBusEnabled, type EventDomain } from './modules/platform/event-bus';
+import { processOutboxEvent } from './modules/platform/outbox.service';
+import { buildOutboxHandlers } from './modules/platform/outbox-handlers';
 
 dotenv.config({ quiet: true });
 

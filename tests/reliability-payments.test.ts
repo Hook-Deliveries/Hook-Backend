@@ -5,12 +5,12 @@ import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
 import { PaymentService } from '../src/services/payment.service';
 import { Order } from '../src/models/orders/order.model';
 import { Payment } from '../src/models/payments/payment.model';
-import { CommerceOutboxEvent } from '../src/models/commerce/commerce.model';
+import { CommerceOutboxEvent } from '../src/modules/platform/outbox.model';
 import { CreditLedger } from '../src/models/promotions/credit-ledger.model';
 import { CreditService } from '../src/services/credit.service';
 import { paymentProvider } from '../src/services/payments/provider-registry';
 import { HttpError } from '../src/utils/http';
-import { processOutbox, replayDeadLetter, OUTBOX_MAX_ATTEMPTS } from '../src/services/outbox.service';
+import { processOutbox, replayDeadLetter, OUTBOX_MAX_ATTEMPTS } from '../src/modules/platform/outbox.service';
 import { DeadLetterEvent } from '../src/models/platform/dead-letter-event.model';
 
 before(startDatabase);

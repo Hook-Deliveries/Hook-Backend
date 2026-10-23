@@ -1,5 +1,5 @@
 import amqp, { type ChannelModel, type ConfirmChannel } from 'amqplib';
-import type { OutboxEventType } from '@models/commerce/commerce.model';
+import type { OutboxEventType } from '@modules/platform/outbox.model';
 
 export const EVENT_EXCHANGE = 'hook.events';
 

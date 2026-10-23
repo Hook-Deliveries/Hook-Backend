@@ -17,6 +17,8 @@ jobs:
       - run: npm ci
       - name: Type check
         run: npx tsc --noEmit
+      - name: Module boundaries
+        run: npx eslint --quiet src/modules
       - name: Build
         run: npm run build
       - name: Tests

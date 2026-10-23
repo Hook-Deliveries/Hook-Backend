@@ -1,11 +1,8 @@
 import { randomUUID } from "crypto";
 import type { ClientSession } from "mongoose";
-import {
-  CommerceOutboxEvent,
-  type OutboxEventType,
-} from "@models/commerce/commerce.model";
+import { CommerceOutboxEvent, type OutboxEventType } from "@modules/platform/outbox.model";
 import { DeadLetterEvent } from "@models/platform/dead-letter-event.model";
-import { nextPublicId } from "@services/public-id.service";
+import { nextPublicId } from "@modules/platform/public-id.service";
 import { isDuplicateKeyError } from "@utils/http";
 
 export const OUTBOX_MAX_ATTEMPTS = 5;

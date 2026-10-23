@@ -6,7 +6,7 @@ import { jwtSecret } from '@config/env';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { resolveAccessContext } from '@services/access-control.service';
-import { presentPlatformRecords } from '@services/platform-presentation.service';
+import { presentPlatformRecords } from '@modules/platform/platform-presentation.service';
 import { HttpError } from '@utils/http';
 import { AuthUserPayload, signAccessToken, signRefreshToken } from './token.service';
 

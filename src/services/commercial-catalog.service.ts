@@ -12,7 +12,7 @@ import { Product } from "@models/products/product.model";
 import { CatalogMediaService } from "./catalog-media.service";
 import { byIdentifier, byProductIdentifier } from "./catalog.service";
 import { HttpError } from "@utils/http";
-import { publishRealtime } from "@services/realtime.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { getLowStockThreshold } from "@services/inventory-settings.service";
 import { legacyProductOptions } from '@lib/legacy-product-options';

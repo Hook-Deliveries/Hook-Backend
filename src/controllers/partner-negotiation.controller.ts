@@ -4,7 +4,7 @@ import { routeParam } from '@lib/api-utils';
 import { HookPartner } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { NegotiationService, type NegotiationIdentity } from '@services/negotiation.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { NegotiationCommandService } from '@services/negotiation-command.service';
 

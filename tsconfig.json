@@ -32,7 +32,8 @@
       "@routes/*": ["./src/routes/*"],
       "@services/*": ["./src/services/*"],
       "@validations/*": ["./src/validations/*"],
-      "@utils/*": ["./src/utils/*"]
+      "@utils/*": ["./src/utils/*"],
+      "@modules/*": ["./src/modules/*"]
     }
   },
   "include": [
@@ -52,7 +53,8 @@
     "src/routes/**/*.ts",
     "src/services/**/*.ts",
     "src/validations/**/*.ts",
-    "src/utils/**/*.ts"
+    "src/utils/**/*.ts",
+    "src/modules/**/*.ts"
   ],
   "exclude": ["node_modules", "dist", "src/**/*.spec.ts", "src/**/*.test.ts"]
 }

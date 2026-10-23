@@ -1,7 +1,7 @@
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { HttpError } from '@utils/http';
 import { sendPushMessages } from '@services/push.service';
 

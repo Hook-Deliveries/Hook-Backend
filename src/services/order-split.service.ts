@@ -3,7 +3,7 @@ import { Order } from '@models/orders/order.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { Shipment } from '@models/fulfilment/fulfilment.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { appendTimeline } from '@lib/order-timeline';
 import { HttpError } from '@utils/http';
 

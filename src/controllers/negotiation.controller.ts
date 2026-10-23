@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { NegotiationService } from '@services/negotiation.service';
 import { routeParam } from '@lib/api-utils';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { NegotiationShoppingService } from '@services/negotiation-shopping.service';
 import { NegotiationCommandService } from '@services/negotiation-command.service';
 

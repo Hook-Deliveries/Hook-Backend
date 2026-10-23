@@ -1,6 +1,6 @@
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { Category } from '@models/categories/category.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { CATEGORY_TREE, type CategoryNode } from '../category-tree';
 
 /**

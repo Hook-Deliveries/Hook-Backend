@@ -1,5 +1,5 @@
 import { LogisticsProvider } from '@models/logistics/logistics-provider.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { HttpError } from '@utils/http';
 
 function identity(identifier: string) {

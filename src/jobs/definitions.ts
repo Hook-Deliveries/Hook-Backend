@@ -8,8 +8,8 @@ import { PaymentService } from '@services/payment.service';
 import { AccountErasureService } from '@services/account-erasure.service';
 import { processPushReceipts } from '@services/push.service';
 import { scanAbandonedCarts, scanNegotiations, scanPaymentReminders, scanWinback, sendNewArrivalsDigest } from '@services/engagement-notifications.service';
-import { eventBusEnabled, publishEvent } from '@services/event-bus';
-import { dispatchDueOutbox } from '@services/outbox.service';
+import { eventBusEnabled, publishEvent } from '@modules/platform/event-bus';
+import { dispatchDueOutbox } from '@modules/platform/outbox.service';
 
 async function drainOutbox() {
   if (!eventBusEnabled()) return fulfilmentService.processOutboxBatch(10);

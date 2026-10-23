@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { publishConfigChanged } from '@services/realtime.service';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
 import { CouponService } from '@services/coupon.service';
 import { User } from '@models/users/user.model';
 import { sendCreated, sendSuccess } from '@utils/http';

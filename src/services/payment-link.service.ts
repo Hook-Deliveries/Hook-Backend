@@ -8,7 +8,7 @@ import { Order } from "@models/orders/order.model";
 import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
 import { Payment } from "@models/payments/payment.model";
-import { nextPublicId } from "@services/public-id.service";
+import { nextPublicId } from "@modules/platform/public-id.service";
 import { paymentProvider, paymentProviderReadiness, type ProviderName } from "@services/payments/provider-registry";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { PaymentService } from "@services/payment.service";

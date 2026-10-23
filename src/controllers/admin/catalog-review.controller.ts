@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { ScopeType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
 import { CatalogReviewService } from '@services/catalog.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { sendSuccess } from '@utils/http';
 import { presentSubmission, presentSubmissions } from '@services/catalog-presentation.service';
 import { adminReviewCache } from '@lib/ttl-cache';

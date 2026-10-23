@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
-import { publishConfigChanged } from '@services/realtime.service';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
 import mongoose from 'mongoose';
 import { LegalContent } from '@models/platform/legal-content.model';
 import { CommercePolicyVersion, CommerceSettings } from '@models/commerce/commerce.model';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { HttpError, sendSuccess } from '@utils/http';
 import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';

@@ -11,7 +11,7 @@ const enabled = Boolean(process.env.REDIS_URL);
 const opts = { skip: enabled ? false : 'REDIS_URL is not set' };
 
 import { getRedis, closeRedis, createBullConnection, redisKey, warmRedis } from '../src/config/redis';
-import { sharedCache } from '../src/services/cache.service';
+import { sharedCache } from '../src/modules/platform/cache.service';
 import { publicCatalogCache } from '../src/lib/ttl-cache';
 import { startQueueWorker, bullPrefix } from '../src/jobs/queue';
 import { wakeOutbox, closeWakeQueue } from '../src/jobs/wake';

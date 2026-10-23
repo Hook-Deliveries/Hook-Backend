@@ -10,8 +10,8 @@ import {
   ShipmentStatus,
 } from '@lib/constants';
 import mongoose from 'mongoose';
-import { CommerceOutboxEvent } from '@models/commerce/commerce.model';
-import { emitOutbox, processOutbox } from '@services/outbox.service';
+import { CommerceOutboxEvent } from '@modules/platform/outbox.model';
+import { emitOutbox, processOutbox } from '@modules/platform/outbox.service';
 import { wakeOutbox } from '../jobs/wake';
 import { FulfilmentTask, RunnerPackage, HubPackage, Consolidation, Shipment, PartnerCustody, ReturnRequest, FulfilmentRefund, LogisticsWebhookEvent, type LogisticsProviderKey } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
@@ -27,12 +27,12 @@ import { OperationState } from '@models/platform/geography.model';
 import { HookPartner, MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
 import { PlatformAuditLog } from '@models/platform/audit-log.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { PaymentService } from '@services/payment.service';
 import { PaymentLinkService } from '@services/payment-link.service';
 import { createCommerceNotification } from '@services/commerce-notification.service';
 import { isLogisticsSimulationEnabled, isFezLogisticsEnabled, logisticsProvider, logisticsReadiness } from '@services/logistics/logistics-provider';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { timelineEntry, notifyStatus } from '@lib/order-timeline';
@@ -329,7 +329,7 @@ export class FulfilmentService {
    * outbox-handlers so this file does not import every consumer.
    */
   async processOutboxBatch(limit = 5) {
-    const { buildOutboxHandlers } = await import('@services/outbox-handlers');
+    const { buildOutboxHandlers } = await import('@modules/platform/outbox-handlers');
     return processOutbox(buildOutboxHandlers(), limit);
   }
 

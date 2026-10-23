@@ -1,6 +1,6 @@
 import compression from 'compression';
 import { redisHealth } from '@config/redis';
-import { sharedCache } from '@services/cache.service';
+import { sharedCache } from '@modules/platform/cache.service';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';

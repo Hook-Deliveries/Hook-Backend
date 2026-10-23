@@ -12,10 +12,10 @@ import { Product } from "@models/products/product.model";
 import {
   nextCartItemPublicId,
   nextPublicId,
-} from "@services/public-id.service";
+} from "@modules/platform/public-id.service";
 import { HttpError } from "@utils/http";
 import { Types } from "mongoose";
-import { publishRealtime } from "@services/realtime.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import { ensureLegacyProductOptions } from './legacy-product-options.service';
 import { Market } from '@models/platform/network.model';
 

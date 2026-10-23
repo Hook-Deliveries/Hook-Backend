@@ -8,18 +8,15 @@ import {
   ShipmentStatus,
 } from "@lib/constants";
 import type { MongoRepository as Repository } from "@lib/mongo-repository";
-import {
-  CommerceOutboxEvent,
-  IntegrationException,
-  PaymentWebhookEvent,
-} from "@models/commerce/commerce.model";
+import { IntegrationException, PaymentWebhookEvent } from "@models/commerce/commerce.model";
+import { CommerceOutboxEvent } from "@modules/platform/outbox.model";
 import { Order } from "@models/orders/order.model";
 import { OrderFulfilmentGroup } from "@models/orders/order-fulfilment-group.model";
 import { Payment } from "@models/payments/payment.model";
 import { Shipment } from "@models/fulfilment/fulfilment.model";
 import { EscrowLedger } from "@models/payments/escrow-ledger.model";
 import { User } from "@models/users/user.model";
-import { nextPublicId } from "@services/public-id.service";
+import { nextPublicId } from "@modules/platform/public-id.service";
 import { createCommerceNotification } from "@services/commerce-notification.service";
 import { EmailService } from "@emails/email.service";
 import { ReferralService } from "@services/referral.service";
@@ -28,9 +25,9 @@ import { CreditLedger } from "@models/promotions/credit-ledger.model";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { defaultProviderName, paymentProvider, type ProviderName } from "./payments/provider-registry";
 import { PaymentAttempt, PaymentLink } from "@models/payments/payment-link.model";
-import { publishRealtime } from "@services/realtime.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import { timelineEntry } from "@lib/order-timeline";
-import { emitOutbox } from "@services/outbox.service";
+import { emitOutbox } from "@modules/platform/outbox.service";
 import { wakeOutbox } from "../jobs/wake";
 import { notifyStaffByPermission } from "@services/staff-notifications.service";
 

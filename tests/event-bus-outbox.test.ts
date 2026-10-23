@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
-import { CommerceOutboxEvent } from '../src/models/commerce/commerce.model';
-import { dispatchDueOutbox, emitOutbox, processOutbox, processOutboxEvent } from '../src/services/outbox.service';
+import { CommerceOutboxEvent } from '../src/modules/platform/outbox.model';
+import { dispatchDueOutbox, emitOutbox, processOutbox, processOutboxEvent } from '../src/modules/platform/outbox.service';
 
 before(startDatabase);
 after(stopDatabase);

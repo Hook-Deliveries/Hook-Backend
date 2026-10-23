@@ -16,7 +16,7 @@ import {
   type NegotiationIdentity,
 } from "./negotiation.service";
 import { CartService } from "./cart.service";
-import { publishRealtime } from "./realtime.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import {
   AzureNegotiationService,
   detectNegotiationLanguage,

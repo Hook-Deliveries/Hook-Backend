@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from 'http';
 import jwt from 'jsonwebtoken';
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { sharedCache } from '@services/cache.service';
+import { sharedCache } from '@modules/platform/cache.service';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { randomUUID } from 'crypto';
 import { parseOrigins, jwtSecret } from '@config/env';
@@ -193,7 +193,7 @@ class RealtimeService {
             if (!owned?.customerId || !partner) throw new HttpError(404, 'Negotiation not found');
             actor = { customerId: owned.customerId, partnerId: partner._id.toString() };
           } else throw new HttpError(403, 'Customer or active Partner required');
-          const { NegotiationService } = await import('./negotiation.service');
+          const { NegotiationService } = await import('@services/negotiation.service');
           await new NegotiationService().detail(actor, input.negotiationId);
           ack({ ok: true, data: await execute(input.negotiationId, input, actor) });
         } catch (error) {
@@ -202,7 +202,7 @@ class RealtimeService {
       };
       socket.on('negotiation.subscribe', (raw, ack) => void acknowledge(raw, ack, async (id, _input, actor) => {
         socket.data.negotiationId = id;
-        const { NegotiationService } = await import('./negotiation.service');
+        const { NegotiationService } = await import('@services/negotiation.service');
         return new NegotiationService().detail(actor, id);
       }));
       socket.on('negotiation.unsubscribe', () => { delete socket.data.negotiationId; });
@@ -211,7 +211,7 @@ class RealtimeService {
         const now = Date.now();
         if (now - Number(socket.data.lastNegotiationSend || 0) < 500) throw new HttpError(429, 'Please wait before sending again');
         socket.data.lastNegotiationSend = now;
-        const { NegotiationCommandService } = await import('./negotiation-command.service');
+        const { NegotiationCommandService } = await import('@services/negotiation-command.service');
         return new NegotiationCommandService().run(actor, id, input.requestId, { message: input.message });
       }));
     });

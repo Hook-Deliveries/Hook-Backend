@@ -1,7 +1,7 @@
 import type { ClientSession } from 'mongoose';
 import { Coupon } from '@models/promotions/coupon.model';
 import { CouponRedemption } from '@models/promotions/coupon-redemption.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { HttpError } from '@utils/http';
 
 export type CouponContext = {

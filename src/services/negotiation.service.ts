@@ -6,7 +6,7 @@ import { CommerceSettings } from '@models/commerce/commerce.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
-import { nextPublicId } from './public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { AzureNegotiationService, detectNegotiationLanguage, assertAzureConfigured } from './azure-negotiation.service';
 import { negotiationContext } from './negotiation-context.service';
 import { negotiationWriteFence } from '@lib/negotiation-execution';
@@ -16,7 +16,7 @@ import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { classifyNegotiationMessage, negotiationMoneyFromMessage } from '@lib/negotiation-intent';
 import { ensureLegacyProductOptions } from './legacy-product-options.service';
-import { publishRealtime } from './realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 
 /**
  * `partnerId` is set only for partner-assisted sessions. The negotiation is

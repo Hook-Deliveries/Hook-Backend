@@ -1,6 +1,6 @@
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { Permission, Role } from '@models/platform/access.model';
-import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.service';
+import { ensurePlatformAccessCatalog } from '@modules/platform/platform-bootstrap.service';
 
 const execute = process.argv.includes('--execute');
 

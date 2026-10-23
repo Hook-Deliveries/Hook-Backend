@@ -3,7 +3,7 @@ import { WaitlistEntry } from '@models/promotions/waitlist-entry.model';
 import { CreditService } from '@services/credit.service';
 import { EmailService } from '@emails/email.service';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 
 function backendOrigin() {
   return String(process.env.APP_URL || 'http://localhost:4000').replace(/\/$/, '');

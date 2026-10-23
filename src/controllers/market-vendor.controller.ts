@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { routeParam } from '@lib/api-utils';
 import { resolveAccessContext, assertScope } from '@services/access-control.service';
 import { ScopeType } from '@lib/constants';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { MarketVendorService } from '@services/market-vendor.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 
