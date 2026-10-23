@@ -44,3 +44,5 @@ temp/
 
 # Local database backups
 .backups/
+
+deploy/certs/

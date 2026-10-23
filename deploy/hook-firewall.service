@@ -1,0 +1,13 @@
+[Unit]
+Description=Allow only Cloudflare to reach ports 80 and 443
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/deploy/hook-backend/deploy/firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
