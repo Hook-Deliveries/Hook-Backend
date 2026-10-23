@@ -129,13 +129,14 @@ services:
       - "443:443"
     volumes:
       - ./nginx:/etc/nginx/conf.d:ro
+      - ./nginx-main.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
     depends_on: [api-1, api-2, api-3]
     restart: unless-stopped
     networks: [backend]
     deploy:
       resources:
-        limits: { memory: 128M }
+        limits: { memory: 384M }
 
 volumes:
   uploads:
