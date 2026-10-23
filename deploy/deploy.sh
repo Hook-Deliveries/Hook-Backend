@@ -4,7 +4,7 @@ set -euo pipefail
 main() {
 cd "$(dirname "$0")"
 
-REF="${1:-origin/main}"
+REF="${1:?usage: deploy.sh <commit-sha|origin/main>}"
 [[ "$REF" =~ ^([0-9a-f]{7,40}|origin/main)$ ]] || { echo "refusing ref: $REF"; exit 2; }
 git -C .. fetch --quiet origin
 git -C .. checkout --quiet --force --detach "$REF"
