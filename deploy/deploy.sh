@@ -10,6 +10,10 @@ git -C .. fetch --quiet origin
 git -C .. checkout --quiet --force --detach "$REF"
 echo "Deploying $(git -C .. log -1 --format='%h %s')"
 
+sudo install -m 644 hook-firewall.service /etc/systemd/system/hook-firewall.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now hook-firewall
+
 if docker image inspect hook-api:latest >/dev/null 2>&1; then
   docker tag hook-api:latest hook-api:previous
 fi
