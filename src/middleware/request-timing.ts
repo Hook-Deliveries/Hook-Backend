@@ -21,6 +21,19 @@ export function requestTiming(req: Request, res: Response, next: NextFunction) {
       console.info(JSON.stringify({ event: 'cart_add_timing', requestId: req.requestId,
         status: res.statusCode, durationMs: Number(durationMs.toFixed(1)) }));
     }
+    if (process.env.NODE_ENV === 'production' && req.path !== '/health') {
+      console.info(JSON.stringify({
+        event: 'request',
+        requestId: req.requestId,
+        method: req.method,
+        path: req.originalUrl.split('?')[0],
+        route: req.route?.path,
+        status: res.statusCode,
+        durationMs: Number(durationMs.toFixed(1)),
+        userId: req.user?.publicId,
+        ip: req.ip,
+      }));
+    }
     if (process.env.NODE_ENV !== 'production' && durationMs >= SLOW_REQUEST_MS) {
       console.warn(JSON.stringify({
         event: 'slow_request',
