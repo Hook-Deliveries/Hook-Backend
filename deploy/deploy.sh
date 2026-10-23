@@ -47,7 +47,7 @@ for s in api-1 api-2 api-3; do
 done
 
 docker compose up -d --no-deps --force-recreate worker consumer-payments consumer-orders consumer-fulfilment
-docker compose up -d nginx
+docker compose up -d nginx && docker compose exec -T nginx nginx -s reload
 docker image prune -f >/dev/null
 echo "Deploy complete"
 }

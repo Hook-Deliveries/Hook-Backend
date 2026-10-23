@@ -11,3 +11,9 @@ scrape_configs:
       family: [queue_consumer_count, queue_coarse_metrics]
     static_configs:
       - targets: ["rabbitmq:15692"]
+  - job_name: rabbitmq-global
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+  - job_name: api
+    static_configs:
+      - targets: ["api-1:4000", "api-2:4000", "api-3:4000"]

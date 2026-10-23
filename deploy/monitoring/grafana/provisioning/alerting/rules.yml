@@ -155,3 +155,78 @@ groups:
               expression: A
               conditions:
                 - evaluator: { type: gt, params: [0] }
+
+      - uid: hook-slow
+        title: API slow
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: 95% of API requests are taking longer than 0.8 seconds.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route!="/metrics"}[5m])))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
+
+      - uid: hook-outbox-stuck
+        title: Outbox stuck
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: An outbox event has been waiting more than 60 seconds; the worker or RabbitMQ may be down.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max(outbox_oldest_pending_seconds)
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [60] }
+
+      - uid: hook-restarts
+        title: API restarting
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: An API copy restarted more than twice in 10 minutes.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              instant: true
+              expr: max(changes(process_start_time_seconds{job="api"}[10m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [2] }

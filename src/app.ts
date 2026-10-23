@@ -22,6 +22,7 @@ import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 import { requestTiming } from '@middleware/request-timing';
+import { metricsHandler } from '@lib/metrics';
 
 export function createApp() {
   const app = express();
@@ -115,6 +116,8 @@ export function createApp() {
   app.use(generalLimiter);
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
+
+  app.get('/metrics', metricsHandler);
 
   app.get('/health', async (_req, res) => {
     // Redis is optional: report it, but a Redis outage is not an API outage.

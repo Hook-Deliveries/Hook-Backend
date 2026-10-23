@@ -1,5 +1,6 @@
 import { performance } from 'perf_hooks';
 import { NextFunction, Request, Response } from 'express';
+import { recordRequest } from '@lib/metrics';
 
 const SLOW_REQUEST_MS = Number(process.env.SLOW_REQUEST_MS || 750);
 
@@ -17,6 +18,7 @@ export function requestTiming(req: Request, res: Response, next: NextFunction) {
 
   res.once('finish', () => {
     const durationMs = performance.now() - startedAt;
+    recordRequest(req, res, durationMs);
     if (req.method === 'POST' && req.route?.path === '/cart/items') {
       console.info(JSON.stringify({ event: 'cart_add_timing', requestId: req.requestId,
         status: res.statusCode, durationMs: Number(durationMs.toFixed(1)) }));
