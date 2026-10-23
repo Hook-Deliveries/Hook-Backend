@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import { ScopeType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
-import { CatalogReviewService } from '@services/catalog.service';
+import { CatalogReviewService } from '@modules/catalog/catalog.service';
 import { recordAudit } from '@modules/platform/platform-audit.service';
 import { sendSuccess } from '@utils/http';
-import { presentSubmission, presentSubmissions } from '@services/catalog-presentation.service';
+import { presentSubmission, presentSubmissions } from '@modules/catalog/catalog-presentation.service';
 import { adminReviewCache } from '@lib/ttl-cache';
 
 function stateScope(req: Request) {

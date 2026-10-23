@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
-import { WaitlistService } from '../src/services/waitlist.service';
-import { CreditService } from '../src/services/credit.service';
+import { WaitlistService } from '../src/modules/notifications/waitlist.service';
+import { CreditService } from '../src/modules/orders/credit.service';
 import { WaitlistEntry } from '../src/models/promotions/waitlist-entry.model';
 import { CreditLedger } from '../src/models/promotions/credit-ledger.model';
 import { User } from '../src/models/users/user.model';

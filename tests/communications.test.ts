@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
 import { AccountType, ScopeType } from '@lib/constants';
-import { CommunicationsService } from '../src/services/communications.service';
+import { CommunicationsService } from '../src/modules/notifications/communications.service';
 import { User } from '../src/models/users/user.model';
 import { StaffProfile, MarketAssociateProfile } from '../src/models/platform/operations-accounts.model';
 import { Role } from '../src/models/platform/access.model';

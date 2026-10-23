@@ -1,8 +1,8 @@
 import { Request, Response } from "express";
-import { getEmailSettings } from "@services/email-settings.service";
+import { getEmailSettings } from "@modules/notifications/email-settings.service";
 import { EmailSettings } from "@models/platform/email-settings.model";
 import { recordAudit } from "@modules/platform/platform-audit.service";
-import { clearEmailSettingsCache } from "@services/email-settings.service";
+import { clearEmailSettingsCache } from "@modules/notifications/email-settings.service";
 import { sendSuccess } from "@utils/http";
 
 export class AdminEmailSettingsController {

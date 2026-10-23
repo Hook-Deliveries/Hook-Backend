@@ -45,7 +45,7 @@ import {
   waitlistMessageEmailTemplate,
   welcomeEmailTemplate,
 } from './templates';
-import { getEmailSettings } from '@services/email-settings.service';
+import { getEmailSettings } from '@modules/notifications/email-settings.service';
 
 type BrevoSendResponse = {
   code?: string;

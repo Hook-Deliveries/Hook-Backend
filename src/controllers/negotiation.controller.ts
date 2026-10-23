@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { NegotiationService } from '@services/negotiation.service';
+import { NegotiationService } from '@modules/negotiation/negotiation.service';
 import { routeParam } from '@lib/api-utils';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { recordAudit } from '@modules/platform/platform-audit.service';
-import { NegotiationShoppingService } from '@services/negotiation-shopping.service';
-import { NegotiationCommandService } from '@services/negotiation-command.service';
+import { NegotiationShoppingService } from '@modules/negotiation/negotiation-shopping.service';
+import { NegotiationCommandService } from '@modules/negotiation/negotiation-command.service';
 
 function identity(req: Request) {
   return { customerId: req.user!.sub };

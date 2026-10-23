@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { fulfilmentService } from '@services/fulfilment.service';
+import { fulfilmentService } from '@modules/fulfilment/fulfilment.service';
 import { routeParam } from '@lib/api-utils';
 import { sendCreated, sendSuccess } from '@utils/http';
 

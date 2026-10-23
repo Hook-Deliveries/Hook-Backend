@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { Category } from '@models/categories/category.model';
@@ -10,8 +10,8 @@ import { sendSuccess } from '@utils/http';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { publicProduct } from '@lib/public-resource';
 import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
-import { WaitlistService } from '@services/waitlist.service';
-import { getEmailSettings } from '@services/email-settings.service';
+import { WaitlistService } from '@modules/notifications/waitlist.service';
+import { getEmailSettings } from '@modules/notifications/email-settings.service';
 import { Faq } from '@models/platform/faq.model';
 
 const routeParam = (value: string | string[] | undefined) =>

@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { after, before, beforeEach, mock, test } from 'node:test';
 import mongoose from 'mongoose';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
-import { fulfilmentService } from '../src/services/fulfilment.service';
+import { fulfilmentService } from '../src/modules/fulfilment/fulfilment.service';
 import { Shipment, LogisticsWebhookEvent } from '../src/models/fulfilment/fulfilment.model';
 import { Order } from '../src/models/orders/order.model';
 

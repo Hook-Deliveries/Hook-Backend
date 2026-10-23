@@ -1,13 +1,13 @@
-import { deliverNegotiationStartNotifications } from '@services/negotiation-notifications.service';
-import { expireUnpaidOrders } from '@services/order.service';
-import { expireNegotiationsAndQuotes } from '@services/negotiation.service';
-import { escalateOverdueAvailabilityChecks } from '@services/catalog-availability.service';
-import { sendDailyAvailabilityDigests } from '@services/availability-digest.service';
-import { fulfilmentService } from '@services/fulfilment.service';
-import { PaymentService } from '@services/payment.service';
-import { AccountErasureService } from '@services/account-erasure.service';
-import { processPushReceipts } from '@services/push.service';
-import { scanAbandonedCarts, scanNegotiations, scanPaymentReminders, scanWinback, sendNewArrivalsDigest } from '@services/engagement-notifications.service';
+import { deliverNegotiationStartNotifications } from '@modules/negotiation/negotiation-notifications.service';
+import { expireUnpaidOrders } from '@modules/orders/order.service';
+import { expireNegotiationsAndQuotes } from '@modules/negotiation/negotiation.service';
+import { escalateOverdueAvailabilityChecks } from '@modules/catalog/catalog-availability.service';
+import { sendDailyAvailabilityDigests } from '@modules/notifications/availability-digest.service';
+import { fulfilmentService } from '@modules/fulfilment/fulfilment.service';
+import { PaymentService } from '@modules/payments/payment.service';
+import { AccountErasureService } from '@modules/identity/account-erasure.service';
+import { processPushReceipts } from '@modules/notifications/push.service';
+import { scanAbandonedCarts, scanNegotiations, scanPaymentReminders, scanWinback, sendNewArrivalsDigest } from '@modules/notifications/engagement-notifications.service';
 import { eventBusEnabled, publishEvent } from '@modules/platform/event-bus';
 import { dispatchDueOutbox } from '@modules/platform/outbox.service';
 

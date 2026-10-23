@@ -1,5 +1,5 @@
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
-import { findStaleInvitations, purgeUnacceptedAccount } from '@services/stale-invitation.service';
+import { findStaleInvitations, purgeUnacceptedAccount } from '@modules/identity/stale-invitation.service';
 
 const execute = process.argv.includes('--execute');
 

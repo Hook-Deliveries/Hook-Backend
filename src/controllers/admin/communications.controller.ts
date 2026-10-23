@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { CommunicationsService } from '@services/communications.service';
+import { CommunicationsService } from '@modules/notifications/communications.service';
 import { sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated } from './admin.helpers';
 import { routeParam } from '@lib/api-utils';

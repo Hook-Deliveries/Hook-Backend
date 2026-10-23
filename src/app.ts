@@ -54,7 +54,7 @@ export function createApp() {
   // parsing or serialization differences.
   app.post(`${apiPrefix}/webhooks/paystack`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
     try {
-      const { PaymentService } = await import('@services/payment.service');
+      const { PaymentService } = await import('@modules/payments/payment.service');
       const signature = String(req.header('x-paystack-signature') || '');
       sendSuccess(res, await new PaymentService().webhook('paystack', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
@@ -84,7 +84,7 @@ export function createApp() {
   // before the global JSON parser, same reasoning as the Paystack route above.
   app.post(`${apiPrefix}/webhooks/monnify`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
     try {
-      const { PaymentService } = await import('@services/payment.service');
+      const { PaymentService } = await import('@modules/payments/payment.service');
       const signature = String(req.header('monnify-signature') || '');
       sendSuccess(res, await new PaymentService().webhook('monnify', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }

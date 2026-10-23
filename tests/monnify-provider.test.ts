@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, mock, test } from 'node:test';
-import { MonnifyProvider } from '../src/services/payments/monnify.provider';
+import { MonnifyProvider } from '../src/modules/payments/providers/monnify.provider';
 import { HttpError } from '../src/utils/http';
 
 const ORIGINAL_ENV = { ...process.env };

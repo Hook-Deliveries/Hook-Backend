@@ -3,10 +3,10 @@ import { AccountType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
 import { HookPartner } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
-import { NegotiationService, type NegotiationIdentity } from '@services/negotiation.service';
+import { NegotiationService, type NegotiationIdentity } from '@modules/negotiation/negotiation.service';
 import { recordAudit } from '@modules/platform/platform-audit.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
-import { NegotiationCommandService } from '@services/negotiation-command.service';
+import { NegotiationCommandService } from '@modules/negotiation/negotiation-command.service';
 
 function customerFilter(identifier: string) {
   return /^[a-f\d]{24}$/i.test(identifier)

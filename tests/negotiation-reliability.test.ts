@@ -1,17 +1,17 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
-import { AzureNegotiationService, negotiationUnavailable } from '../src/services/azure-negotiation.service';
-import { NegotiationService } from '../src/services/negotiation.service';
+import { AzureNegotiationService, negotiationUnavailable } from '../src/modules/negotiation/azure-negotiation.service';
+import { NegotiationService } from '../src/modules/negotiation/negotiation.service';
 import { Negotiation } from '../src/models/negotiations/negotiation.model';
 import { CommerceSettings } from '../src/models/commerce/commerce.model';
 import { Product } from '../src/models/products/product.model';
-import { PricingEngine } from '../src/services/pricing-engine.service';
+import { PricingEngine } from '../src/modules/catalog/pricing-engine.service';
 import { Cart } from '../src/models/cart/cart.model';
 import { ProductVariant } from '../src/models/catalog/catalog.model';
 import { LegalContent } from '../src/models/platform/legal-content.model';
-import { canReceiveNegotiationAlert } from '../src/services/negotiation-notifications.service';
+import { canReceiveNegotiationAlert } from '../src/modules/negotiation/negotiation-notifications.service';
 import { ScopeType } from '../src/lib/constants';
-import { negotiationContext } from '../src/services/negotiation-context.service';
+import { negotiationContext } from '../src/modules/negotiation/negotiation-context.service';
 import { withNegotiationExecution, negotiationWriteFence } from '../src/lib/negotiation-execution';
 
 const keys = ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_DEPLOYMENT_NAME', 'AZURE_OPENAI_API_VERSION'];

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, mock, afterEach } from 'node:test';
 import { commerceCartItemSchema } from '../src/validations/commerce.schemas';
-import { ensureLegacyProductOptions } from '../src/services/legacy-product-options.service';
+import { ensureLegacyProductOptions } from '../src/modules/catalog/legacy-product-options.service';
 import { legacyProductOptions } from '../src/lib/legacy-product-options';
 import { ProductVariant } from '../src/models/catalog/catalog.model';
 afterEach(() => mock.restoreAll());

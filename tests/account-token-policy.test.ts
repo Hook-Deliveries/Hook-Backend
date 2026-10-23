@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import jwt from 'jsonwebtoken';
-import { signAccessToken, signRefreshToken } from '../src/services/token.service';
+import { signAccessToken, signRefreshToken } from '../src/modules/identity/token.service';
 import { AccountType, UserRole } from '../src/lib/constants';
 
 test('customer token lasts seven days while staff policy remains short', () => {

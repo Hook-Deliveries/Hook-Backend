@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
 import { createHash } from "node:crypto";
-import { NegotiationShoppingService } from "../src/services/negotiation-shopping.service";
-import { NegotiationService } from "../src/services/negotiation.service";
-import { CartService } from "../src/services/cart.service";
+import { NegotiationShoppingService } from "../src/modules/negotiation/negotiation-shopping.service";
+import { NegotiationService } from "../src/modules/negotiation/negotiation.service";
+import { CartService } from "../src/modules/orders/cart.service";
 import { Negotiation } from "../src/models/negotiations/negotiation.model";
 import { ProductVariant } from "../src/models/catalog/catalog.model";
-import { AzureNegotiationService } from "../src/services/azure-negotiation.service";
+import { AzureNegotiationService } from "../src/modules/negotiation/azure-negotiation.service";
 import { CommerceSettings } from '../src/models/commerce/commerce.model';
 
 afterEach(() => {

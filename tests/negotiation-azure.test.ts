@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { AzureNegotiationService } from '../src/services/azure-negotiation.service';
+import { AzureNegotiationService } from '../src/modules/negotiation/azure-negotiation.service';
 
 test('Azure invalid output fails closed and authentication errors are not retried', async (t) => {
   const keys = ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_DEPLOYMENT_NAME', 'AZURE_OPENAI_API_VERSION'];

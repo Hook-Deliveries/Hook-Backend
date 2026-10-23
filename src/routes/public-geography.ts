@@ -1,6 +1,6 @@
 import { publicBanners } from '@controllers/admin/banners.controller';
 import { Router } from 'express';
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { isValidObjectId } from 'mongoose';
 import { OperationCity, OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
