@@ -7,8 +7,8 @@ import { adminRepos, getPagination, paginated, routeParam } from './admin.helper
 import { User } from '@models/users/user.model';
 import { Order } from '@models/orders/order.model';
 import { CustomerAddress } from '@models/commerce/commerce.model';
-import { revokeAccountSessions } from '@services/account-session.service';
-import { CreditService } from '@services/credit.service';
+import { revokeAccountSessions } from '@modules/identity/account-session.service';
+import { CreditService } from '@modules/orders/credit.service';
 
 const USER_LIST_FIELDS = 'publicId email phone firstName lastName role accountType accountStatus scopeType assignedStateIds assignedHubIds assignedCategoryIds isEmailVerified isPhoneVerified isActive lastLoginAt createdAt updatedAt';
 

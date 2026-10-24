@@ -3,7 +3,7 @@ import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
-import { NotificationService } from '@services/notification.service';
+import { NotificationService } from '@modules/notifications/notification.service';
 import { sendSuccess } from '@utils/http';
 import { routeParam } from '@lib/api-utils';
 

@@ -7,8 +7,8 @@ import { User } from '../src/models/users/user.model';
 import { Cart } from '../src/models/cart/cart.model';
 import { CartItem } from '../src/models/cart/cart-item.model';
 import { Product } from '../src/models/products/product.model';
-import { dispatchNotification, getPreferences, isQuietHour, updatePreferences, DEFAULT_PREFERENCES } from '../src/services/notification-dispatch.service';
-import { scanAbandonedCarts } from '../src/services/engagement-notifications.service';
+import { dispatchNotification, getPreferences, isQuietHour, updatePreferences, DEFAULT_PREFERENCES } from '../src/modules/notifications/notification-dispatch.service';
+import { scanAbandonedCarts } from '../src/modules/notifications/engagement-notifications.service';
 
 process.env.PUSH_ENABLED = 'false';
 

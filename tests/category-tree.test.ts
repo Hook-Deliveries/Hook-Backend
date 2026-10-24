@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
 import { Category } from '../src/models/categories/category.model';
-import { categoryService } from '../src/services/category.service';
+import { categoryService } from '../src/modules/catalog/category.service';
 import { CATEGORY_TREE } from '../src/database/category-tree';
 
 before(async () => { await startDatabase(); });

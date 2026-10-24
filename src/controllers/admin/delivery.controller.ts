@@ -1,12 +1,12 @@
 import { Request, Response } from 'express';
-import { announce } from '@services/engagement-notifications.service';
+import { announce } from '@modules/notifications/engagement-notifications.service';
 import { publishConfigChanged } from '@modules/platform/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { DeliveryPricingRule } from '@models/platform/delivery-pricing.model';
 import { OperationState } from '@models/platform/geography.model';
-import { calculateDeliveryPricing } from '@services/delivery-pricing.service';
+import { calculateDeliveryPricing } from '@modules/orders/delivery-pricing.service';
 import { OperationLocalGovernment } from '@models/platform/geography.model';
-import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
+import { refreshNigerianLocationCatalog } from '@modules/catalog/location-catalog.service';
 import { nextPublicId } from '@modules/platform/public-id.service';
 import { recordAudit } from '@modules/platform/platform-audit.service';
 import { DEFAULT_DELIVERY_FEE_MINOR } from '@lib/constants';

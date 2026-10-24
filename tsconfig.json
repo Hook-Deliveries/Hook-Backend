@@ -30,7 +30,6 @@
       "@middleware/*": ["./src/middleware/*"],
       "@models/*": ["./src/models/*"],
       "@routes/*": ["./src/routes/*"],
-      "@services/*": ["./src/services/*"],
       "@validations/*": ["./src/validations/*"],
       "@utils/*": ["./src/utils/*"],
       "@modules/*": ["./src/modules/*"]
@@ -51,7 +50,6 @@
     "src/middleware/**/*.ts",
     "src/models/**/*.ts",
     "src/routes/**/*.ts",
-    "src/services/**/*.ts",
     "src/validations/**/*.ts",
     "src/utils/**/*.ts",
     "src/modules/**/*.ts"

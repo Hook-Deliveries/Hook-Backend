@@ -10,19 +10,19 @@ import type { OutboxHandler } from "@modules/platform/outbox.service";
 export function buildOutboxHandlers(): Record<OutboxEventType, OutboxHandler> {
   return {
     ORDER_APPROVED_FOR_FULFILMENT: async (event) => {
-      const { fulfilmentService } = await import("@services/fulfilment.service");
+      const { fulfilmentService } = await import("@modules/fulfilment");
       return fulfilmentService.consumeApprovedOrder(event);
     },
     PAYMENT_CONFIRMED_EFFECTS: async (event) => {
-      const { PaymentService } = await import("@services/payment.service");
+      const { PaymentService } = await import("@modules/payments");
       return new PaymentService().deliverPaymentConfirmedEffects(event);
     },
     ORDER_CREATED_EFFECTS: async (event) => {
-      const { CheckoutService } = await import("@services/checkout.service");
+      const { CheckoutService } = await import("@modules/orders");
       return new CheckoutService().deliverOrderCreatedEffects(event);
     },
     REFUND_PROCESSED_EFFECTS: async (event) => {
-      const { fulfilmentService } = await import("@services/fulfilment.service");
+      const { fulfilmentService } = await import("@modules/fulfilment");
       return fulfilmentService.deliverRefundEffects(event);
     },
   };

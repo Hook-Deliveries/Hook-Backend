@@ -4,7 +4,7 @@ import { sendSuccess } from '@utils/http';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
 import { FulfilmentRefund, ReturnRequest } from '@models/fulfilment/fulfilment.model';
-import { fulfilmentService } from '@services/fulfilment.service';
+import { fulfilmentService } from '@modules/fulfilment/fulfilment.service';
 
 const TZ = 'Africa/Lagos';
 const UNPAID: CommerceOrderStatus[] = [CommerceOrderStatus.AWAITING_PAYMENT, CommerceOrderStatus.CANCELLED];

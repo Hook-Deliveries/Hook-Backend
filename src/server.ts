@@ -117,6 +117,8 @@ async function bootstrap() {
   server = app.listen(port, () => {
     printReady(port, apiPrefix);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
   realtime.attach(server);
   startCacheWarmer(port, apiPrefix);
 }

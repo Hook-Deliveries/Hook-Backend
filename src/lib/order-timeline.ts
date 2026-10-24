@@ -32,7 +32,7 @@ export async function pushOrderTimeline(orderId: unknown, status: string, actor?
 export async function notifyStatus(orderId: unknown, status: string) {
   await pushOrderStatus(orderId, status);
   try {
-    const { sendOrderStatusEmail } = await import('@services/order-status-email.service');
+    const { sendOrderStatusEmail } = await import('@modules/notifications/order-status-email.service');
     await sendOrderStatusEmail(orderId, status);
   } catch {
     // Fire-and-forget: a mail failure must never block a status transition.
@@ -83,7 +83,7 @@ async function pushOrderStatus(orderId: unknown, status: string) {
   try {
     const order = (await Order.findById(orderId).select('publicId userId initiatingPartnerId').lean()) as { publicId?: string; userId?: string; initiatingPartnerId?: string } | null;
     if (!order?.publicId) return;
-    const { createCommerceNotification } = await import('@services/commerce-notification.service');
+    const { createCommerceNotification } = await import('@modules/notifications/commerce-notification.service');
     if (order.userId) {
       await createCommerceNotification({
         // DELIVERED reuses the key the manual delivery path already writes.

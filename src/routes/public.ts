@@ -10,7 +10,7 @@ import { paymentLinkInitializeSchema } from '@validations/commerce.schemas';
 import { AppReleasesController } from '@controllers/admin/app-releases.controller';
 import { AccountDeletionController } from '@controllers/account-deletion.controller';
 import { rateLimit } from '@middleware/security';
-import { sha256 } from '@services/account-deletion.service';
+import { sha256 } from '@modules/identity/account-deletion.service';
 import {
   publicDeletionCancelSchema,
   publicDeletionCodeSchema,

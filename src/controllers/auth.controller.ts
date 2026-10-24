@@ -7,8 +7,8 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
-import { AuthService } from '@services/auth.service';
-import type { SessionMetadata } from '@services/account-session.service';
+import { AuthService } from '@modules/identity/auth.service';
+import type { SessionMetadata } from '@modules/identity/account-session.service';
 import { sendCreated, sendSuccess } from '@utils/http';
 
 function sessionMetadata(req: Request): SessionMetadata {

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { WaitlistService } from '@services/waitlist.service';
+import { WaitlistService } from '@modules/notifications/waitlist.service';
 import { sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated } from './admin.helpers';
 

@@ -12,7 +12,7 @@ import {
   registerSchema,
 } from '@validations/common.schemas';
 import { asyncHandler, sendSuccess } from '@utils/http';
-import { acceptAccountInvitation } from '@services/account-invitation.service';
+import { acceptAccountInvitation } from '@modules/identity/account-invitation.service';
 
 const deviceMetadataFields = {
   deviceId: z.string().trim().min(1).max(120).optional(),

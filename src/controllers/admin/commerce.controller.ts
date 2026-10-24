@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
-import { CheckoutService } from '@services/checkout.service';
+import { CheckoutService } from '@modules/orders/checkout.service';
 import { Request, Response } from 'express';
 import { publishConfigChanged } from '@modules/platform/realtime.service';
-import { PaymentService } from '@services/payment.service';
-import { AccountDeletionService } from '@services/account-deletion.service';
-import { AccountErasureService } from '@services/account-erasure.service';
+import { PaymentService } from '@modules/payments/payment.service';
+import { AccountDeletionService } from '@modules/identity/account-deletion.service';
+import { AccountErasureService } from '@modules/identity/account-erasure.service';
 import { AccountDeletionRequest } from '@models/support/account-deletion-request.model';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
@@ -18,10 +18,10 @@ import { Payment } from '@models/payments/payment.model';
 import { PaymentAttempt } from '@models/payments/payment-link.model';
 import { User } from '@models/users/user.model';
 import { isValidObjectId } from 'mongoose';
-import { PodService } from '@services/pod.service';
+import { PodService } from '@modules/payments/pod.service';
 import { recordAudit } from '@modules/platform/platform-audit.service';
-import { paymentProviderReadiness } from '@services/payments/provider-registry';
-import { clearInventorySettingsCache } from '@services/inventory-settings.service';
+import { paymentProviderReadiness } from '@modules/payments/providers/provider-registry';
+import { clearInventorySettingsCache } from '@modules/catalog/inventory-settings.service';
 import { publicCatalogCache } from '@lib/ttl-cache';
 import { sharedCache } from '@modules/platform/cache.service';
 

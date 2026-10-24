@@ -5,21 +5,21 @@ import {
   ScopeType,
   UserRole,
 } from "@lib/constants";
-import { CartService } from "@services/cart.service";
+import { CartService } from "@modules/orders/cart.service";
 import { publicCart } from "@lib/public-resource";
-import { CheckoutService } from "@services/checkout.service";
-import { PaymentService } from "@services/payment.service";
+import { CheckoutService } from "@modules/orders/checkout.service";
+import { PaymentService } from "@modules/payments/payment.service";
 import { nextPublicId } from "@modules/platform/public-id.service";
 import { HookPartner } from "@models/platform/operations-accounts.model";
 import { User } from "@models/users/user.model";
 import { Order } from "@models/orders/order.model";
 import { CommerceSettings } from "@models/commerce/commerce.model";
 import { recordAudit } from "@modules/platform/platform-audit.service";
-import { issueCustomerAccountSetup } from "@services/account-invitation.service";
+import { issueCustomerAccountSetup } from "@modules/identity/account-invitation.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
-import { createCommerceNotification } from "@services/commerce-notification.service";
-import { notifyStaffByPermission } from "@services/staff-notifications.service";
+import { createCommerceNotification } from "@modules/notifications/commerce-notification.service";
+import { notifyStaffByPermission } from "@modules/notifications/staff-notifications.service";
 
 export class PartnerCommerceController {
   private cart = new CartService();

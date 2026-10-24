@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { publishConfigChanged } from '@modules/platform/realtime.service';
-import { CouponService } from '@services/coupon.service';
+import { CouponService } from '@modules/orders/coupon.service';
 import { User } from '@models/users/user.model';
 import { sendCreated, sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated, routeParam } from './admin.helpers';

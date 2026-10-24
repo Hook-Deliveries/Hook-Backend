@@ -35,7 +35,7 @@ import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { ensurePlatformAccessCatalog } from '@modules/platform/platform-bootstrap.service';
 import { hookIdFromPublicId, nextPublicIds, nextPublicId } from '@modules/platform/public-id.service';
-import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
+import { refreshNigerianLocationCatalog } from '@modules/catalog/location-catalog.service';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from './market-associate-product-catalog';
 

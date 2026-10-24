@@ -1,4 +1,4 @@
-import { notifyLikersOfProductChange } from '@services/engagement-notifications.service';
+import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -7,7 +7,7 @@ import { adminRepos, getPagination, paginated, routeParam } from './admin.helper
 import { publicProduct } from '@lib/public-resource';
 import { Product } from '@models/products/product.model';
 import { recordAudit } from '@modules/platform/platform-audit.service';
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
 import { Market } from '@models/platform/network.model';
