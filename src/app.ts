@@ -113,7 +113,7 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);
   app.use(generalLimiter);
-  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+  if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
   app.get('/health', async (_req, res) => {
