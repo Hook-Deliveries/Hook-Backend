@@ -17,12 +17,11 @@ jobs:
       - run: npm ci
       - name: Type check
         run: npx tsc --noEmit
-      - name: Module boundaries
-        run: npx eslint --quiet src/modules
+      - name: Lint
+        run: npx eslint --quiet "src/**/*.ts"
       - name: Build
         run: npm run build
       - name: Tests
-        continue-on-error: true
         run: npx tsx --test tests/*.test.ts
 
   docker:

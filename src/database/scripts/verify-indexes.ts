@@ -22,11 +22,11 @@ function sameKey(a: Record<string, unknown>, b: Record<string, unknown>) {
   return ak.length === bk.length && ak.every((key, i) => bk[i] === key && String(a[key]) === String(b[key]));
 }
 
-function loadModels(dir: string) {
+async function loadModels(dir: string): Promise<void> {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
-    if (statSync(full).isDirectory()) loadModels(full);
-    else if (/\.model\.(ts|js)$/.test(name)) require(full);
+    if (statSync(full).isDirectory()) await loadModels(full);
+    else if (/\.model\.(ts|js)$/.test(name)) await import(full);
   }
 }
 
@@ -36,7 +36,8 @@ async function main() {
   // background as models load and would hide the very drift this reports.
   mongoose.connection.config.autoIndex = false;
   // No model barrel exists, so load every *.model file to register its schema.
-  loadModels(join(__dirname, '..', '..', 'models'));
+  await loadModels(join(__dirname, '..', '..', 'models'));
+  await loadModels(join(__dirname, '..', '..', 'modules'));
   let missing = 0;
   for (const model of Object.values(mongoose.models)) {
     const declared = model.schema.indexes();

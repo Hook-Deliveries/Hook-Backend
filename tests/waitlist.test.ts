@@ -20,15 +20,15 @@ async function createUser(email: string) {
 }
 
 test('joining twice with the same email is a no-op, not an error', async () => {
-  const first = await waitlist.join({ email: 'Test@Example.com', name: 'Test' });
-  const second = await waitlist.join({ email: 'test@example.com', name: 'Test Again' });
+  const first = await waitlist.join({ email: 'Test@Example.com', name: 'Test', phone: '+2348012345678', city: 'Lagos' });
+  const second = await waitlist.join({ email: 'test@example.com', name: 'Test Again', phone: '+2348012345678', city: 'Lagos' });
   assert.equal(first.alreadyJoined, false);
   assert.equal(second.alreadyJoined, true);
   assert.equal(await WaitlistEntry.countDocuments({ email: 'test@example.com' }), 1);
 });
 
 test('grantWelcomeBonus settles a waitlist entry exactly once even if called twice', async () => {
-  await waitlist.join({ email: 'waiter@example.com', name: 'Waiter' });
+  await waitlist.join({ email: 'waiter@example.com', name: 'Waiter', phone: '+2348012345678', city: 'Lagos' });
   await waitlist.gift({ amountMinor: 50000, reason: 'Launch gift' });
   const userId = await createUser('waiter@example.com');
 
@@ -46,8 +46,8 @@ test('grantWelcomeBonus settles a waitlist entry exactly once even if called twi
 });
 
 test('gift: an already-redeemed entry is credited immediately, a pending one is queued for signup', async () => {
-  await waitlist.join({ email: 'already-has-account@example.com', name: 'Early' });
-  await waitlist.join({ email: 'not-signed-up-yet@example.com', name: 'Later' });
+  await waitlist.join({ email: 'already-has-account@example.com', name: 'Early', phone: '+2348012345678', city: 'Lagos' });
+  await waitlist.join({ email: 'not-signed-up-yet@example.com', name: 'Later', phone: '+2348012345678', city: 'Lagos' });
   const earlyUserId = await createUser('already-has-account@example.com');
   await WaitlistEntry.updateOne({ email: 'already-has-account@example.com' }, { $set: { redeemedByUserId: earlyUserId, redeemedAt: new Date() } });
 
@@ -70,8 +70,8 @@ test('gift: an already-redeemed entry is credited immediately, a pending one is 
 });
 
 test('unsubscribe is idempotent and excludes the entry from broadcasts even when explicitly targeted', async () => {
-  await waitlist.join({ email: 'stay@example.com', name: 'Stay' });
-  await waitlist.join({ email: 'leave@example.com', name: 'Leave' });
+  await waitlist.join({ email: 'stay@example.com', name: 'Stay', phone: '+2348012345678', city: 'Lagos' });
+  await waitlist.join({ email: 'leave@example.com', name: 'Leave', phone: '+2348012345678', city: 'Lagos' });
   const leaver = await WaitlistEntry.findOne({ email: 'leave@example.com' }).lean();
 
   const first = await waitlist.unsubscribe(leaver!.unsubscribeToken);
