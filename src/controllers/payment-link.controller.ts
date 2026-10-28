@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { PaymentLinkService } from "@services/payment-link.service";
+import { PaymentLinkService } from "@modules/payments/payment-link.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 
 function param(value: string | string[] | undefined) {

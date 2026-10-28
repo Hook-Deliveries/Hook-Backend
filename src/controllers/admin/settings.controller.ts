@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
-import { publishConfigChanged } from '@services/realtime.service';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
 import { auditAdminAction } from '@lib/audit';
 import { sendSuccess } from '@utils/http';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { Product } from '@models/products/product.model';
 import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 
 let settings: Record<string, unknown> = {
   platformName: 'Hook',

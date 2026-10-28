@@ -1,15 +1,15 @@
 import { Request, Response } from 'express';
-import { announce } from '@services/engagement-notifications.service';
+import { announce } from '@modules/notifications/engagement-notifications.service';
 import { UserRole } from '@lib/constants';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, actor, routeParam } from './admin.helpers';
-import { nextPublicId } from '@services/public-id.service';
-import { publishRealtime } from '@services/realtime.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { adminCategoryCache } from '@lib/ttl-cache';
 import { Category } from '@models/categories/category.model';
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 
 const MANAGER_ROLES: UserRole[] = [UserRole.SUPPORT, UserRole.ADMIN];
 

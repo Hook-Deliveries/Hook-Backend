@@ -32,11 +32,11 @@ import { MarketAssociateMarketVendorController } from '@controllers/market-vendo
 import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
 import { itemIssueSchema, itemVerifySchema } from '@validations/fulfilment.schemas';
 import { Product } from '@models/products/product.model';
-import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { CatalogAvailabilityService } from '@modules/catalog/catalog-availability.service';
 import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
-import { NotificationService } from '@services/notification.service';
+import { NotificationService } from '@modules/notifications/notification.service';
 import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
 
 const webPushSubscribeSchema = z.object({

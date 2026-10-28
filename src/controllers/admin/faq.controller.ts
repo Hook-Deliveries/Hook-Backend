@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { Faq } from '@models/platform/faq.model';
-import { nextPublicId } from '@services/public-id.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 

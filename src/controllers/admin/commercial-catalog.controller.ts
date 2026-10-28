@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
 import { ScopeType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
-import { CommercialCatalogService } from '@services/commercial-catalog.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { CommercialCatalogService } from '@modules/catalog/commercial-catalog.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { sendSuccess } from '@utils/http';
-import { presentCommercialSummary } from '@services/catalog-presentation.service';
-import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { presentCommercialSummary } from '@modules/catalog/catalog-presentation.service';
+import { CatalogAvailabilityService } from '@modules/catalog/catalog-availability.service';
 
 function stateScope(req: Request) {
   if (req.platformContext?.stateId) return [req.platformContext.stateId];

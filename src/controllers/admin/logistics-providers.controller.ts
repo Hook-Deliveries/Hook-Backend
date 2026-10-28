@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { publishConfigChanged } from '@services/realtime.service';
-import { LogisticsProviderService } from '@services/logistics-provider.service';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
+import { LogisticsProviderService } from '@modules/fulfilment/logistics-provider.service';
 import { sendCreated, sendSuccess } from '@utils/http';
 import { actor, adminRepos, routeParam } from './admin.helpers';
 

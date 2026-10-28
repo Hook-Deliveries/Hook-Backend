@@ -1,11 +1,11 @@
 import { Request, Response } from 'express';
 import { adminReviewCache } from '@lib/ttl-cache';
-import { publishRealtime } from '@services/realtime.service';
-import { MarketAssociateCatalogService } from '@services/catalog.service';
-import { recordAudit } from '@services/platform-audit.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
+import { MarketAssociateCatalogService } from '@modules/catalog/catalog.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { sendCreated, sendSuccess } from '@utils/http';
-import { presentSubmission, presentSubmissions } from '@services/catalog-presentation.service';
+import { presentSubmission, presentSubmissions } from '@modules/catalog/catalog-presentation.service';
 
 export class MarketAssociateCatalogController {
   private readonly catalog = new MarketAssociateCatalogService();

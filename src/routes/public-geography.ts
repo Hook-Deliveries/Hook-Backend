@@ -1,17 +1,17 @@
 import { publicBanners } from '@controllers/admin/banners.controller';
 import { Router } from 'express';
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { isValidObjectId } from 'mongoose';
 import { OperationCity, OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
 import { Category } from '@models/categories/category.model';
 import { Product } from '@models/products/product.model';
 import { ProductStatus } from '@lib/constants';
-import { presentMarketRecords } from '@services/platform-presentation.service';
+import { presentMarketRecords } from '@modules/platform/platform-presentation.service';
 import { asyncHandler, HttpError, sendSuccess } from '@utils/http';
 import { PublicCatalogController } from '@controllers/public-catalog.controller';
 import { PublicController } from '@controllers/public.controller';
-import { sharedCache } from '@services/cache.service';
+import { sharedCache } from '@modules/platform/cache.service';
 
 async function resolveId(model: any, identifier: unknown, extraField?: string) {
   const value = String(identifier || '').trim();

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { categoryService } from '@services/category.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { Category } from "@models/categories/category.model";
 import { OperationState } from "@models/platform/geography.model";
@@ -8,10 +8,10 @@ import { Product } from "@models/products/product.model";
 import {
   publicProductRepresentations,
   publicProductRepresentation,
-} from "@services/commercial-catalog.service";
+} from "@modules/catalog/commercial-catalog.service";
 import { routeParam } from "@lib/api-utils";
 import { HttpError, sendSuccess } from "@utils/http";
-import { sharedCache } from "@services/cache.service";
+import { sharedCache } from "@modules/platform/cache.service";
 
 const PUBLIC_PRODUCT_CARD_FIELDS = [
   "publicId",

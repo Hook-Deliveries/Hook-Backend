@@ -1,6 +1,6 @@
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { Faq } from '@models/platform/faq.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 
 // One-off dummy content for /help; safe to re-run — skips any question already present.
 const DUMMY_FAQS: Array<{ question: string; answer: string }> = [

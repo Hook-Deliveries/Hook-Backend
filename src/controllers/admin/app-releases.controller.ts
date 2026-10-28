@@ -3,8 +3,8 @@ import mongoose from 'mongoose';
 import { AppRelease } from '@models/platform/app-release.model';
 import { appReleaseDecision, compareAppBuild, compareNumericVersion, validStoreUrl, appReleaseSchema, versionAnnouncementSchema, HOOK_PLAY_STORE_URL } from '@lib/app-release-policy';
 import { HttpError, sendSuccess, sendCreated } from '@utils/http';
-import { recordAudit } from '@services/platform-audit.service';
-import { publishRealtime } from '@services/realtime.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { routeParam } from '@lib/api-utils';
 import { z } from 'zod';
 

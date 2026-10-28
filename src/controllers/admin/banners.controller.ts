@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { auditAdminAction } from '@lib/audit';
 import { Banner } from '@models/platform/banner.model';
-import { publishConfigChanged } from '@services/realtime.service';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
 
 const view = (banner: any) => ({
   id: String(banner._id),

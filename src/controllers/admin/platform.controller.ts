@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { announce } from '@services/engagement-notifications.service';
+import { announce } from '@modules/notifications/engagement-notifications.service';
 import { isValidObjectId, Model } from 'mongoose';
 import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { getPagination, paginated, routeParam } from '@lib/api-utils';
@@ -16,19 +16,19 @@ import {
   StaffProfile,
 } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
-import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@services/access-control.service';
-import { revokeAccountSessions } from '@services/account-session.service';
-import { clearStaleInvitationFor, purgeUnacceptedAccount } from '@services/stale-invitation.service';
+import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@modules/identity/access-control.service';
+import { revokeAccountSessions } from '@modules/identity/account-session.service';
+import { clearStaleInvitationFor, purgeUnacceptedAccount } from '@modules/identity/stale-invitation.service';
 import { FulfilmentTask, PartnerCustody } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
 import { ProductSubmission } from '@models/catalog/catalog.model';
-import { recordAudit } from '@services/platform-audit.service';
-import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
-import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
-import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
-import { publishRealtime } from '@services/realtime.service';
-import { MarketVendorService } from '@services/market-vendor.service';
-import { createCommerceNotification } from '@services/commerce-notification.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@modules/platform/public-id.service';
+import { issueAccountInvitation, revokeAccountInvitations } from '@modules/identity/account-invitation.service';
+import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@modules/platform/platform-presentation.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
+import { MarketVendorService } from '@modules/catalog/market-vendor.service';
+import { createCommerceNotification } from '@modules/notifications/commerce-notification.service';
 import { isDuplicateKeyError, HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 

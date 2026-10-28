@@ -4,7 +4,7 @@ import { ProductSubmission, ProductVariant } from '@models/catalog/catalog.model
 import { MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
-import { nextPublicId } from '@services/public-id.service';
+import { nextPublicId } from '@modules/platform/public-id.service';
 import { productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from '../seeds/market-associate-product-catalog';
 
 dotenv.config({ quiet: true });

@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { assertSafeEnvironment } from './config/env';
 import { assertRedisConfig, closeRedis, redisConfigured, redactRedisUrl, connectRedis } from './config/redis';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
-import { realtime } from './services/realtime.service';
+import { realtime } from './modules/platform/realtime.service';
 import { startQueueWorker } from './jobs/queue';
 import { startInProcessJobs, stopInProcessJobs } from './jobs/in-process';
 

@@ -6,7 +6,7 @@ import { AppReleasesController } from '../src/controllers/admin/app-releases.con
 import { AppRelease } from '../src/models/platform/app-release.model';
 import { PlatformAuditLog } from '../src/models/platform/audit-log.model';
 import { PublicIdCounter } from '../src/models/platform/counter.model';
-import { realtime } from '../src/services/realtime.service';
+import { realtime } from '../src/modules/platform/realtime.service';
 
 test('announcements create both platforms with ordered writes in the same transaction', async (t) => {
   let committed = false;

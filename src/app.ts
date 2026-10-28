@@ -1,6 +1,6 @@
 import compression from 'compression';
 import { redisHealth } from '@config/redis';
-import { sharedCache } from '@services/cache.service';
+import { sharedCache } from '@modules/platform/cache.service';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
@@ -22,6 +22,7 @@ import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 import { requestTiming } from '@middleware/request-timing';
+import { metricsHandler } from '@lib/metrics';
 
 export function createApp() {
   const app = express();
@@ -53,7 +54,7 @@ export function createApp() {
   // parsing or serialization differences.
   app.post(`${apiPrefix}/webhooks/paystack`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
     try {
-      const { PaymentService } = await import('@services/payment.service');
+      const { PaymentService } = await import('@modules/payments/payment.service');
       const signature = String(req.header('x-paystack-signature') || '');
       sendSuccess(res, await new PaymentService().webhook('paystack', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
@@ -83,7 +84,7 @@ export function createApp() {
   // before the global JSON parser, same reasoning as the Paystack route above.
   app.post(`${apiPrefix}/webhooks/monnify`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
     try {
-      const { PaymentService } = await import('@services/payment.service');
+      const { PaymentService } = await import('@modules/payments/payment.service');
       const signature = String(req.header('monnify-signature') || '');
       sendSuccess(res, await new PaymentService().webhook('monnify', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
@@ -115,6 +116,8 @@ export function createApp() {
   app.use(generalLimiter);
   if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
+
+  app.get('/metrics', metricsHandler);
 
   app.get('/health', async (_req, res) => {
     // Redis is optional: report it, but a Redis outage is not an API outage.

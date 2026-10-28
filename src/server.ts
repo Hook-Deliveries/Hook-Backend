@@ -4,11 +4,11 @@ import mongoose from 'mongoose';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
-import { ensurePlatformAccessCatalog } from './services/platform-bootstrap.service';
+import { ensurePlatformAccessCatalog } from './modules/platform/platform-bootstrap.service';
 import { startInProcessJobs, stopInProcessJobs } from './jobs/in-process';
 import { assertRedisConfig, closeRedis, connectRedis, describeRedis, type RedisStatus } from './config/redis';
 import { closeWakeQueue } from './jobs/wake';
-import { realtime } from './services/realtime.service';
+import { realtime } from './modules/platform/realtime.service';
 
 dotenv.config({ quiet: true });
 
@@ -117,6 +117,8 @@ async function bootstrap() {
   server = app.listen(port, () => {
     printReady(port, apiPrefix);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
   realtime.attach(server);
   startCacheWarmer(port, apiPrefix);
 }
@@ -128,7 +130,7 @@ async function bootstrap() {
  */
 function startCacheWarmer(port: number, apiPrefix: string) {
   if (process.env.CACHE_WARMER === 'off' || process.env.NODE_ENV === 'test') return;
-  const paths = ['/public/categories', '/public/categories?withProducts=true', '/public/markets', '/public/banners?placement=home', '/public/banners?placement=category', '/public/feed', '/public/products?limit=20', '/public/discover?limit=30'];
+  const paths = ['/public/categories', '/public/categories?withProducts=true', '/public/markets', '/public/banners?placement=home', '/public/banners?placement=category', '/public/products?limit=20', '/public/discover?limit=30'];
   const warm = () => Promise.allSettled(paths.map((path) => fetch(`http://127.0.0.1:${port}/${apiPrefix}${path}`).then((response) => response.arrayBuffer())));
   setTimeout(() => void warm(), 3_000).unref();
   setInterval(() => void warm(), 15_000).unref();

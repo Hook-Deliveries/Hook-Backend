@@ -6,7 +6,7 @@ import { OperationState } from '../src/models/platform/geography.model';
 import { Market } from '../src/models/platform/network.model';
 import { MarketAssociateProfile } from '../src/models/platform/operations-accounts.model';
 import { User } from '../src/models/users/user.model';
-import { presentSubmission, presentSubmissions } from '../src/services/catalog-presentation.service';
+import { presentSubmission, presentSubmissions } from '../src/modules/catalog/catalog-presentation.service';
 import { resetDatabase, startDatabase, stopDatabase } from './helpers/replset';
 
 before(async () => { await startDatabase(); });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, test } from 'node:test';
 import mongoose from 'mongoose';
 import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
-import { fulfilmentService } from '../src/services/fulfilment.service';
+import { fulfilmentService } from '../src/modules/fulfilment/fulfilment.service';
 import { FulfilmentTask, RunnerPackage } from '../src/models/fulfilment/fulfilment.model';
 import { MarketAssociateProfile } from '../src/models/platform/operations-accounts.model';
 import { Order } from '../src/models/orders/order.model';

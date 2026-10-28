@@ -2,7 +2,7 @@ import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { Notification } from '@models/notifications/notification.model';
 import { CreditLedger } from '@models/promotions/credit-ledger.model';
 import { User } from '@models/users/user.model';
-import { CreditService } from '@services/credit.service';
+import { CreditService } from '@modules/orders/credit.service';
 
 const execute = process.argv.includes('--execute');
 const credits = new CreditService();

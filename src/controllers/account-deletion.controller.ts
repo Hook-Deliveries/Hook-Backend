@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { AccountDeletionService } from '@services/account-deletion.service';
+import { AccountDeletionService } from '@modules/identity/account-deletion.service';
 import { sendSuccess } from '@utils/http';
 
 /**

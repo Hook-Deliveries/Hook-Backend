@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { DELIVERY_SLA_HOURS, FulfilmentTaskStatus, OrderStatus, PaymentStatus } from "@lib/constants";
 import { auditAdminAction } from "@lib/audit";
 import { EmailService } from "@emails/email.service";
-import { getEmailSettings } from "@services/email-settings.service";
+import { getEmailSettings } from "@modules/notifications/email-settings.service";
 import { HttpError, sendCreated, sendSuccess } from "@utils/http";
 import {
   adminRepos,
@@ -22,10 +22,10 @@ import { Payment } from "@models/payments/payment.model";
 import { PaymentLink } from "@models/payments/payment-link.model";
 import { CommerceOrderStatus } from "@lib/constants";
 import { appendTimeline, notifyStatus } from "@lib/order-timeline";
-import { PaymentService } from "@services/payment.service";
-import { restoreOrderIncentives } from "@services/order-restoration.service";
-import { splitOrderIntoGroups } from "@services/order-split.service";
-import { createCommerceNotification } from "@services/commerce-notification.service";
+import { PaymentService } from "@modules/payments/payment.service";
+import { restoreOrderIncentives } from "@modules/orders/order-restoration.service";
+import { splitOrderIntoGroups } from "@modules/orders/order-split.service";
+import { createCommerceNotification } from "@modules/notifications/commerce-notification.service";
 import { FulfilmentTask } from "@models/fulfilment/fulfilment.model";
 import { MarketAssociateProfile } from "@models/platform/operations-accounts.model";
 import { OperationState } from "@models/platform/geography.model";

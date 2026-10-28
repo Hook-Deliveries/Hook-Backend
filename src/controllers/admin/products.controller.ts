@@ -1,4 +1,4 @@
-import { notifyLikersOfProductChange } from '@services/engagement-notifications.service';
+import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -6,15 +6,15 @@ import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { publicProduct } from '@lib/public-resource';
 import { Product } from '@models/products/product.model';
-import { recordAudit } from '@services/platform-audit.service';
-import { categoryService } from '@services/category.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
 import { Market } from '@models/platform/network.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
-import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicId } from '@modules/platform/public-id.service';
 import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
 

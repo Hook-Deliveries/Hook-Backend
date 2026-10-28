@@ -3,10 +3,10 @@ import { isValidObjectId } from 'mongoose';
 import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
-import { NotificationService } from '@services/notification.service';
+import { NotificationService } from '@modules/notifications/notification.service';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
-import { realtime } from '@services/realtime.service';
+import { realtime } from '@modules/platform/realtime.service';
 import { HttpError } from '@utils/http';
 import { sendSuccess } from '@utils/http';
 

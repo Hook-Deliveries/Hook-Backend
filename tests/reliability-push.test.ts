@@ -4,8 +4,8 @@ import { startDatabase, resetDatabase, stopDatabase } from './helpers/replset';
 import { DeviceToken } from '../src/models/notifications/device-token.model';
 import { PushTicket } from '../src/models/notifications/push-ticket.model';
 import { Notification } from '../src/models/notifications/notification.model';
-import { processPushReceipts, sendPushMessages, sendPushToUser } from '../src/services/push.service';
-import { createCommerceNotification } from '../src/services/commerce-notification.service';
+import { processPushReceipts, sendPushMessages, sendPushToUser } from '../src/modules/notifications/push.service';
+import { createCommerceNotification } from '../src/modules/notifications/commerce-notification.service';
 
 before(startDatabase);
 after(stopDatabase);

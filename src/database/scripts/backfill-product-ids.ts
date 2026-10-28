@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { Product } from '@models/products/product.model';
-import { hookIdFromPublicId, nextPublicIds } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicIds } from '@modules/platform/public-id.service';
 
 dotenv.config({ quiet: true });
 
