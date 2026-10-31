@@ -1,7 +1,7 @@
 name: hook
 
 x-app: &app
-  image: hook-api:latest
+  image: ${API_IMAGE:-hook-api}:latest
   env_file: .env
   environment:
     NODE_ENV: production
@@ -27,6 +27,8 @@ services:
     <<: *app
     build:
       context: ..
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-14000}:4000"
   api-2: *app
   api-3: *app
 
@@ -91,7 +93,7 @@ services:
       RABBITMQ_DEFAULT_USER: hook
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
-      - "127.0.0.1:15672:15672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -132,6 +134,7 @@ services:
       - ./nginx-main.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
     depends_on: [api-1, api-2, api-3]
+    extra_hosts: ["host.docker.internal:host-gateway"]
     restart: unless-stopped
     networks: [backend]
     deploy:
