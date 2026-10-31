@@ -50,7 +50,7 @@ for s in $APIS; do
 done
 
 docker compose up -d --no-deps --force-recreate worker consumer-payments consumer-orders consumer-fulfilment
-[ "$(setting SKIP_NGINX)" = 1 ] || { docker compose up -d nginx && docker compose exec -T nginx nginx -s reload; }
+[ "$(setting SKIP_NGINX)" = 1 ] || { docker compose up -d nginx && docker compose exec -T nginx nginx -s reload </dev/null; }
 docker image prune -f >/dev/null
 echo "Deploy complete"
 }
