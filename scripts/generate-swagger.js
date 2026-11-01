@@ -245,7 +245,7 @@ const schemas = {
       },
       deliveryNotes: { type: 'string' },
       scheduledDeliveryAt: { type: 'string', format: 'date-time' },
-      paymentMode: { type: 'string', enum: ['pay_now', 'pay_on_delivery'], default: 'pay_now' },
+      paymentMode: { type: 'string', enum: ['pay_now'], default: 'pay_now' },
       boothSessionToken: {
         type: 'string',
         description: 'Current booth session. Required for checkout when the cart belongs to a booth.',
@@ -803,7 +803,7 @@ add('delete', `${apiPrefix}/admin/booths/{id}/attendant`, op('Admin Commerce', '
 add('put', `${apiPrefix}/admin/booths/{id}/inventory`, op('Admin Commerce', 'Replace active booth product assignments', { parameters: [param('id', 'Booth id')] }));
 add('get', `${apiPrefix}/admin/support/deletion-requests`, op('Admin Commerce', 'List support-managed account deletion requests'));
 add('patch', `${apiPrefix}/admin/support/deletion-requests/{id}`, op('Admin Commerce', 'Verify, approve, cancel, or anonymize a deletion request', { parameters: [param('id', 'Deletion request id')] }));
-add('get', `${apiPrefix}/admin/analytics/checkout`, op('Admin Commerce', 'Get Pay Now versus POD checkout funnel analytics'));
+add('get', `${apiPrefix}/admin/analytics/checkout`, op('Admin Commerce', 'Get checkout funnel analytics'));
 add('get', `${apiPrefix}/admin/financials`, op('Admin Financials', 'Get financial dashboard (super-admin)'));
 add('get', `${apiPrefix}/admin/financials/payments`, op('Admin Financials', 'List gateway payments and collection obligations'));
 add('get', `${apiPrefix}/admin/financials/escrow-ledger`, op('Admin Financials', 'List immutable Hook escrow ledger entries'));
@@ -949,10 +949,6 @@ add('post', `${apiPrefix}/partner/customers/{customerId}/checkout/states/{stateI
 add('post', `${apiPrefix}/partner/customers/{customerId}/checkout/states/{stateId}/confirm`, op('Partner Commerce', 'Confirm an idempotent prepaid assisted Order.', { parameters: [param('customerId', 'CUS public ID'), param('stateId', 'STA public ID')] }));
 add('get', `${apiPrefix}/partner/orders`, op('Partner Commerce', 'List only Orders initiated by the authenticated Partner.'));
 add('post', `${apiPrefix}/partner/orders/{orderId}/payment-instructions`, op('Partner Commerce', 'Initialize customer Paystack payment instructions for an owned Partner Order.', { parameters: [param('orderId', 'ORD public ID')] }));
-add('get', `${apiPrefix}/admin/commerce/pod`, op('Commerce Operations', 'List State-scoped Pay-at-Handover verification queue.'));
-add('post', `${apiPrefix}/admin/commerce/pod/{id}/calls`, op('Commerce Operations', 'Record an audited confirmation call.', { parameters: [param('id', 'ORD public ID')] }));
-add('post', `${apiPrefix}/admin/commerce/pod/{id}/decision`, op('Commerce Operations', 'Approve, require prepayment, or cancel a POD Order.', { parameters: [param('id', 'ORD public ID')] }));
-add('post', `${apiPrefix}/admin/commerce/pod/{id}/override`, op('Commerce Operations', 'Super Admin one-time high-value POD override.', { parameters: [param('id', 'ORD public ID')] }));
 add('get', `${apiPrefix}/admin/commerce/payments`, op('Commerce Operations', 'List scoped canonical payments.'));
 add('get', `${apiPrefix}/admin/commerce/integration-exceptions`, op('Commerce Operations', 'List unresolved Paystack evidence exceptions.'));
 add('get', `${apiPrefix}/admin/commerce/outbox`, op('Commerce Operations', 'Inspect fulfilment-ready outbox events.'));
@@ -1059,7 +1055,7 @@ const spec = {
     { name: 'Customer Commerce', description: 'Customer addresses, State-grouped baskets, and backend-controlled checkout.' },
     { name: 'Payments', description: 'Provider-neutral payment lifecycle with active Paystack Hosted Checkout.' },
     { name: 'Partner Commerce', description: 'Self-scoped prepaid assisted ordering through Hook Partners.' },
-    { name: 'Commerce Operations', description: 'State-scoped POD, payment evidence, settings, and outbox operations.' },
+    { name: 'Commerce Operations', description: 'Payment evidence, settings, and outbox operations.' },
     { name: 'Market Associate Fulfilment', description: 'Self-scoped Market Associate sourcing, packing, and issue workflows.' },
     { name: 'Fulfilment Operations', description: 'State/Hub-scoped fulfilment control and reassignment.' },
     { name: 'Hub Operations', description: 'Market Associate package receipt, visible QC, consolidation, and sealing.' },

@@ -3,7 +3,7 @@ import { CreditService } from '@modules/orders/credit.service';
 import { PaymentLink } from '@models/payments/payment-link.model';
 import type { MongoRepository as Repository } from '@lib/mongo-repository';
 import { AppDataSource } from '@config/data-source';
-import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, POD_PAUSED, ProductStatus, ScopeType } from '@lib/constants';
+import { AccountStatus, AccountType, DEFAULT_DELIVERY_FEE, DELIVERY_SLA_HOURS, OrderStatus, OrderType, PaymentMode, PaymentStatus, ProductStatus, ScopeType } from '@lib/constants';
 import { EmailService } from '@emails/email.service';
 import { getEmailSettings } from '@modules/notifications';
 import { Cart } from '@models/cart/cart.model';
@@ -53,7 +53,6 @@ function timelineFor(order: any, shipment?: any) {
   const sequence = ['AWAITING_PAYMENT', 'OPERATIONS_REVIEW', 'IN_FULFILMENT', 'READY_FOR_CONSOLIDATION', 'READY_FOR_DISPATCH', 'IN_TRANSIT', 'DELIVERED'];
   const stageByStatus: Record<string, number> = {
     AWAITING_PAYMENT: 0,
-    AWAITING_DELIVERY_FEE: 0,
     VERIFICATION_PENDING: 1,
     OPERATIONS_REVIEW: 1,
     APPROVED_FOR_FULFILMENT: 2,
@@ -124,9 +123,6 @@ export class OrderService {
     if (cart) cart.items = cart.items || await this.cartItems.find({ where: { cartId: cart.id }, relations: { product: true } });
     const cartItems = cart?.items || [];
     if (!cart || !cartItems.length) throw new HttpError(400, 'Cart is empty');
-    if (body.paymentMode === PaymentMode.PAY_ON_DELIVERY && POD_PAUSED) {
-      throw new HttpError(409, 'Pay on Delivery is not currently available');
-    }
     if (body.orderType === OrderType.GIFT && (!body.giftRecipient || body.paymentMode !== PaymentMode.PAY_NOW)) {
       throw new HttpError(400, 'Gift orders require recipient delivery details and Pay Now');
     }
@@ -213,37 +209,6 @@ export class OrderService {
     const customer = owner.userId ? await AppDataSource.getRepository(User).findOne({ where: { id: owner.userId } }) : undefined;
     const customerEmail = customer?.email || body.guestEmail;
     const customerName = `${customer?.firstName || ''} ${customer?.lastName || ''}`.trim() || body.guestName || body.guestEmail;
-    if (customerEmail && body.paymentMode === PaymentMode.PAY_ON_DELIVERY) {
-      await this.email.sendOrderConfirmation({
-        to: customerEmail,
-        name: customerName,
-        orderCode: order.orderCode,
-        amount: order.total,
-        itemCount,
-        lines: cartItems.map((item) => ({
-          title: item.product?.title || 'Product',
-          quantity: Number(item.quantity || 0),
-          amount: Number(item.unitPrice || 0) * Number(item.quantity || 0),
-        })),
-        subtotal: order.subtotal,
-        deliveryFee: order.deliveryFee,
-        deliveryAddress: order.deliveryAddress?.formattedAddress,
-        expectedDeliveryDate: order.estimatedDeliveryAt
-          ? new Date(order.estimatedDeliveryAt).toLocaleDateString('en-NG', { dateStyle: 'medium' })
-          : undefined,
-      });
-    }
-    const hookOpsEmail = (await getEmailSettings()).hookOpsEmail;
-    if (hookOpsEmail && body.paymentMode === PaymentMode.PAY_ON_DELIVERY) {
-      await this.email.sendHookNewOrder({
-        to: hookOpsEmail,
-        customerName: customerName || 'Customer',
-        orderCode: order.orderCode,
-        amount: order.total,
-        itemCount,
-      });
-    }
-
     const result = await this.orders.findOne({
       where: { id: order.id },
       relations: { items: true, logistics: true },
@@ -445,14 +410,10 @@ export class OrderService {
           : undefined,
       totalMinor: Number(order.totalMinor ?? Math.round(Number(order.total || 0) * 100)),
       currency: order.currency || 'NGN',
-      // Pay on Delivery: the online delivery fee and whether it has been paid.
-      awaitingDeliveryFee: String(order.commerceStatus || '').toUpperCase() === 'AWAITING_DELIVERY_FEE',
-      podFeeDueNowMinor: Number((order as any).podFeeDueNowMinor || 0),
-      podFeePaid: Boolean((order as any).podFeePaid),
       timeline: timelineFor(order, primaryShipment),
       deliveries,
       substitutions: substitutions.map((entry: any) => ({ id: entry.publicId || entry.id, version: entry.version, status: entry.status, type: entry.type, summary: entry.summary, original: entry.originalSnapshot, proposal: entry.proposal, adjustmentMinor: entry.adjustmentMinor, adjustmentStatus: entry.adjustmentStatus, adjustmentAuthorizationUrl: entry.adjustmentAuthorizationUrl, customerDecision: entry.customerDecision })),
-      canCancel: ['PENDING', 'AWAITING_PAYMENT', 'AWAITING_DELIVERY_FEE'].includes(String(order.commerceStatus || order.status).toUpperCase())
+      canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
         && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
     } as any;
   }
@@ -470,7 +431,7 @@ export class OrderService {
           {
             _id: stored._id,
             userId: owner.userId,
-            commerceStatus: { $in: ['PENDING', 'AWAITING_PAYMENT', 'AWAITING_DELIVERY_FEE'] },
+            commerceStatus: { $in: ['PENDING', 'AWAITING_PAYMENT'] },
             commercePaymentStatus: { $nin: ['CONFIRMED', 'PAID'] },
           } as any,
           {

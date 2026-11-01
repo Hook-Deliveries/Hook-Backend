@@ -7,7 +7,6 @@ import {
   CommercePaymentMethod,
   CommercePaymentStatus,
   DEFAULT_DELIVERY_FEE_MINOR,
-  DEFAULT_POD_LIMIT_MINOR,
   DeliveryMethod,
   NegotiatedQuoteStatus,
   OrderStatus,
@@ -106,8 +105,6 @@ export class CheckoutService {
     useCredits?: boolean;
     /** VAT as a fraction (0.075 = 7.5%). Comes from settings, locked at preview. */
     vatRate?: number;
-    /** Extra charge for Pay on Delivery, collected with the delivery fee up front. */
-    podSurchargeMinor?: number;
   }) {
     const coupon = await this.coupons.tryValidate(input.couponCode, {
       userId: input.customerId,
@@ -121,7 +118,6 @@ export class CheckoutService {
 
     const deliveryFeeMinor = Math.max(0, input.deliveryFeeMinor - deliveryDiscountMinor);
     const vatRate = input.vatRate ?? 0.075;
-    const podSurchargeMinor = Math.max(0, Number(input.podSurchargeMinor || 0));
     const vatBasisMinor = Math.max(0, input.subtotalMinor - itemDiscountMinor);
     const vatMinor = Math.round(vatBasisMinor * vatRate);
     const taxSnapshot = {
@@ -134,37 +130,24 @@ export class CheckoutService {
 
     const payableBeforeCredits = Math.max(
       0,
-      input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor + podSurchargeMinor,
+      input.subtotalMinor - itemDiscountMinor + vatMinor + deliveryFeeMinor,
     );
-    // Credits are a prepayment instrument, so they don't apply on Pay at Handover — there's nothing collected up front for them to reduce.
-    const creditsEligible = input.paymentMethod === CommercePaymentMethod.PREPAID;
-    const creditsAppliedMinor = input.useCredits && creditsEligible
+    const creditsAppliedMinor = input.useCredits
       ? Math.min(
           await this.credits.spendableFor(input.customerId, input.subtotalMinor),
           payableBeforeCredits,
         )
       : 0;
 
-    if (input.useCredits && !creditsEligible) {
-      throw new HttpError(
-        409,
-        "Hook credit can only be used when you pay now",
-        undefined,
-        "CREDITS_REQUIRE_PREPAYMENT",
-      );
-    }
-
     return {
       coupon,
       couponDiscountMinor,
       itemDiscountMinor,
-      creditsEligible,
       creditsAppliedMinor,
       vatRate,
       vatMinor,
       taxSnapshot,
       deliveryFeeMinor,
-      podSurchargeMinor,
       totalMinor: Math.max(0, payableBeforeCredits - creditsAppliedMinor),
     };
   }
@@ -359,13 +342,8 @@ export class CheckoutService {
             coordinates: addressSnapshot?.coordinates as { latitude: number; longitude: number } | undefined,
             defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
           });
-    const isPod = input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
-    // VAT and the Pay on Delivery surcharge are admin settings, locked into the preview so confirm charges what was shown.
+    // VAT is an admin setting, locked into the preview so confirm charges what was shown.
     const vatFraction = Number(settings.vatRatePercent ?? 7.5) / 100;
-    const surchargeValue = Number(settings.podSurchargeValue || 0);
-    const podSurchargeMinor = isPod
-      ? settings.podSurchargeType === "percent" ? Math.round((subtotalMinor * surchargeValue) / 100) : Math.round(surchargeValue)
-      : 0;
     const money = await this.calculateMoney({
       customerId: actor.customerId,
       subtotalMinor,
@@ -374,43 +352,8 @@ export class CheckoutService {
       couponCode: input.couponCode,
       useCredits: input.useCredits,
       vatRate: vatFraction,
-      podSurchargeMinor,
     });
     const { vatRate, vatMinor, taxSnapshot, deliveryFeeMinor, couponDiscountMinor, creditsAppliedMinor, totalMinor, coupon } = money;
-    // What is paid online now on a Pay on Delivery order: the delivery fee plus the surcharge. The rest is paid at the door.
-    const podFeeDueNowMinor = isPod ? deliveryFeeMinor + podSurchargeMinor : 0;
-    const podLimitMinor = Number(
-      deliveryState.podLimitMinor ??
-        settings.defaultPodLimitMinor ??
-        DEFAULT_POD_LIMIT_MINOR,
-    );
-    // A State can ask for a higher (or lower) minimum than the global one.
-    const podMinimumMinor = Number((deliveryState as any).podMinimumOrderMinor ?? settings.podMinimumOrderMinor ?? 3_000_000);
-    // The minimum is judged on the order's real value (goods after discount, VAT and delivery) — the POD surcharge and Hook credit are excluded so choosing either never changes eligibility.
-    const orderValueMinor = Math.max(0, subtotalMinor - (coupon?.appliesToDelivery ? 0 : couponDiscountMinor) + vatMinor + deliveryFeeMinor);
-    const podEnabled = Boolean(
-      settings.podEnabled &&
-      deliveryState.podEnabled &&
-      customer.podEligible !== false &&
-      orderValueMinor >= podMinimumMinor,
-    );
-    if (isPod && orderValueMinor < podMinimumMinor && settings.podEnabled && deliveryState.podEnabled && customer.podEligible !== false)
-      throw new HttpError(
-        409,
-        `Pay on Delivery is for orders of ₦${(podMinimumMinor / 100).toLocaleString("en-NG")} or more, including delivery and VAT. Yours comes to ₦${(orderValueMinor / 100).toLocaleString("en-NG")}.`,
-        { podMinimumOrderMinor: podMinimumMinor, orderValueMinor, subtotalMinor },
-        "POD_NOT_ELIGIBLE",
-      );
-    if (isPod && !podEnabled)
-      throw new HttpError(
-        409,
-        "Pay at Handover is not available for this Order",
-        undefined,
-        "POD_NOT_ELIGIBLE",
-      );
-    const highValue =
-      input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER &&
-      totalMinor > podLimitMinor;
     const rawToken = randomBytes(32).toString("base64url");
     const publicTokenId = randomBytes(10).toString("hex");
     const expiresAt = new Date(
@@ -465,22 +408,6 @@ export class CheckoutService {
       totalMinor,
       currency: "NGN",
       policyVersions: settings.activePolicyVersions,
-      podDecision: {
-        eligible: podEnabled,
-        orderValueMinor,
-        minimumOrderMinor: podMinimumMinor,
-        limitMinor: podLimitMinor,
-        highValue,
-        requiresOverride: highValue,
-        requiresConfirmationCall:
-          input.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER,
-        feeDueNowMinor: podFeeDueNowMinor,
-        surchargeMinor: podSurchargeMinor,
-        // A paid fee auto-approves the order when the admin allows it, it isn't high value, and the customer is in good standing; anything else keeps the manual confirmation call.
-        autoApprove: isPod && settings.podAutoApproveEnabled !== false && !highValue,
-      },
-      podSurchargeMinor,
-      podFeeDueNowMinor,
       expiresAt,
     });
     return {
@@ -506,11 +433,7 @@ export class CheckoutService {
       couponDiscountMinor,
       creditsAppliedMinor,
       totalMinor,
-      podFeeDueNowMinor,
-      podSurchargeMinor,
-      balanceDueOnDeliveryMinor: isPod ? Math.max(0, totalMinor - podFeeDueNowMinor) : 0,
       currency: "NGN",
-      podDecision: preview.podDecision,
       policyVersions: preview.policyVersions,
     };
   }
@@ -659,9 +582,8 @@ export class CheckoutService {
       paymentMethod: preview.paymentMethod as CommercePaymentMethod,
       couponCode: preview.couponCode,
       useCredits: Number(preview.creditsAppliedMinor || 0) > 0,
-      // Charge exactly what the preview showed, even if an admin changed VAT or the surcharge meanwhile.
+      // Charge exactly what the preview showed, even if an admin changed VAT meanwhile.
       vatRate: Number((preview.taxSnapshot as any)?.rate ?? 0.075),
-      podSurchargeMinor: Number(preview.podSurchargeMinor || 0),
     });
 
     if (
@@ -680,10 +602,7 @@ export class CheckoutService {
     }));
     const effectiveGroups = groupSnapshots.length ? groupSnapshots : [{ sourceStateId: preview.stateId, subtotalMinor: Number(preview.subtotalMinor) }];
     const groupIds = await Promise.all(effectiveGroups.map(() => nextPublicId("orderFulfilmentGroup")));
-    const pod = preview.paymentMethod === CommercePaymentMethod.PAY_AT_HANDOVER;
-    // Pay on Delivery: one balance payment per group (paid at the door) plus one online payment for the delivery fee and surcharge.
-    const paymentIds = await Promise.all((pod ? [...effectiveGroups, null] : [null]).map(() => nextPublicId("payment")));
-    const feePaymentPublicId = pod ? paymentIds[effectiveGroups.length] : undefined;
+    const paymentIds = await Promise.all([nextPublicId("payment")]);
     let allocatedFee = 0;
     let allocatedVat = 0;
     let allocatedDiscount = 0;
@@ -709,7 +628,7 @@ export class CheckoutService {
         deliveryFeeShareMinor: feeShare,
         couponDiscountShareMinor: discountShare,
         creditsAppliedShareMinor: creditShare,
-        paymentPublicId: pod ? paymentIds[index] : undefined,
+        paymentPublicId: undefined,
       };
     });
     const ids = {
@@ -725,11 +644,7 @@ export class CheckoutService {
     let orderId = "";
     try {
       await session.withTransaction(async () => {
-        const highValue = Boolean((preview.podDecision as any)?.highValue);
-        // Pay on Delivery starts by waiting for the online delivery fee; review follows once it is paid.
-        const commerceStatus = pod
-          ? CommerceOrderStatus.AWAITING_DELIVERY_FEE
-          : CommerceOrderStatus.AWAITING_PAYMENT;
+        const commerceStatus = CommerceOrderStatus.AWAITING_PAYMENT;
         const order = new Order({
           publicId: ids.order,
           orderCode: ids.order,
@@ -742,9 +657,7 @@ export class CheckoutService {
           deliveryMethod: preview.deliveryMethod,
           commercePaymentMethod: preview.paymentMethod,
           commerceStatus,
-          commercePaymentStatus: pod
-            ? CommercePaymentStatus.DUE_AT_HANDOVER
-            : CommercePaymentStatus.PENDING,
+          commercePaymentStatus: CommercePaymentStatus.PENDING,
           subtotalMinor: preview.subtotalMinor,
           vatRate: preview.vatRate,
           vatMinor: preview.vatMinor,
@@ -768,10 +681,8 @@ export class CheckoutService {
           total: preview.totalMinor / 100,
           vendorCount: 0,
           status: OrderStatus.AWAITING_PAYMENT,
-          podFeeDueNowMinor: pod ? Number(preview.podFeeDueNowMinor || 0) : 0,
-          podFeePaid: false,
           paymentStatus: PaymentStatus.PENDING,
-          paymentMode: pod ? PaymentMode.PAY_ON_DELIVERY : PaymentMode.PAY_NOW,
+          paymentMode: PaymentMode.PAY_NOW,
           orderType: OrderType.STANDARD,
           deliveryAddress: preview.addressSnapshot || {
             street: String(
@@ -789,7 +700,6 @@ export class CheckoutService {
           policyVersions: preview.policyVersions,
           checkoutPreviewId: preview.id,
           idempotencyKey,
-          podReview: preview.podDecision,
           partialFulfilment: false,
           deliverySubsidy: 0,
           timeline: [timelineEntry(commerceStatus, actor.actorId, { channel: preview.channel })],
@@ -837,77 +747,35 @@ export class CheckoutService {
           })),
           { session },
         );
+        // One online payment for the whole order, net of any coupon and Hook credit.
+        const itemDiscountShareMinor = currentMoney.coupon?.appliesToDelivery ? 0 : Number(preview.couponDiscountMinor || 0);
+        const payableMinor = Math.max(
+          0,
+          Number(preview.subtotalMinor)
+            + Number(preview.vatMinor || 0)
+            + Number(preview.deliveryFeeMinor)
+            - itemDiscountShareMinor
+            - Number(preview.creditsAppliedMinor || 0),
+        );
         await Payment.create(
-          (pod ? groupPlans : [{
-            publicId: undefined,
-            subtotalMinor: Number(preview.subtotalMinor),
-            vatShareMinor: Number(preview.vatMinor || 0),
-            deliveryFeeShareMinor: Number(preview.deliveryFeeMinor),
-            couponDiscountShareMinor: Number(preview.couponDiscountMinor || 0),
-            creditsAppliedShareMinor: Number(preview.creditsAppliedMinor || 0),
-            paymentPublicId: ids.payment,
-          }]).map((group) => {
-            // Charge the discounted figure: item-level coupon and credits come off what the gateway collects; a free-delivery coupon is already netted into the delivery fee, so subtracting it again would double-discount.
-            const itemDiscountShareMinor = currentMoney.coupon?.appliesToDelivery ? 0 : group.couponDiscountShareMinor;
-            // On Pay on Delivery, the fee and surcharge were paid online, so what's left at the door covers only the goods and VAT.
-            const payableMinor = Math.max(
-              0,
-              group.subtotalMinor
-                + group.vatShareMinor
-                + (pod ? 0 : group.deliveryFeeShareMinor)
-                - itemDiscountShareMinor
-                - group.creditsAppliedShareMinor,
-            );
-            return {
-              publicId: group.paymentPublicId,
-              orderId: order.id,
-              fulfilmentGroupId: group.publicId,
-              resourceType: "order",
-              transactionRef: `${referencePrefix}-${group.paymentPublicId}`,
-              gateway: providerName,
-              paymentMethod: pod ? "pos" : "card",
-              amount: payableMinor / 100,
-              amountMinor: payableMinor,
-              currency: preview.currency,
-              gatewayFee: 0,
-              amountSettled: 0,
-              status: PaymentStatus.PENDING,
-              commerceStatus: pod
-                ? CommercePaymentStatus.DUE_AT_HANDOVER
-                : CommercePaymentStatus.PENDING,
-              refundedAmount: 0,
-            };
-          }).concat(pod ? [{
-            publicId: feePaymentPublicId,
+          [{
+            publicId: ids.payment,
             orderId: order.id,
-            fulfilmentGroupId: undefined as any,
             resourceType: "order",
-            transactionRef: `${referencePrefix}-${feePaymentPublicId}`,
+            transactionRef: `${referencePrefix}-${ids.payment}`,
             gateway: providerName,
             paymentMethod: "card",
-            amount: Number(preview.podFeeDueNowMinor || 0) / 100,
-            amountMinor: Number(preview.podFeeDueNowMinor || 0),
+            amount: payableMinor / 100,
+            amountMinor: payableMinor,
             currency: preview.currency,
             gatewayFee: 0,
             amountSettled: 0,
             status: PaymentStatus.PENDING,
             commerceStatus: CommercePaymentStatus.PENDING,
             refundedAmount: 0,
-          }] : []) as any,
+          }] as any,
           { session },
         );
-        if (pod) {
-          const payments = await Payment.find({ orderId: order.id }).session(session).select("_id publicId fulfilmentGroupId").lean();
-          for (const payment of payments) {
-            // The delivery-fee payment belongs to the order, not to a fulfilment group.
-            if (!payment.fulfilmentGroupId) continue;
-            await OrderFulfilmentGroup.updateOne(
-              { publicId: payment.fulfilmentGroupId },
-              { $set: { paymentId: payment.publicId || String(payment._id) } },
-              { session },
-            );
-          }
-        }
         for (const line of currentLines)
           if (line.quoteId) {
             const quoteUpdate = await NegotiatedQuote.updateOne(
@@ -1003,16 +871,13 @@ export class CheckoutService {
 
   /** Outbox consumer for ORDER_CREATED_EFFECTS, run after the checkout transaction commits; keyed on the order so a replay can't double-notify and failures retry. */
   async deliverOrderCreatedEffects(event: { payload: Record<string, any> }) {
-    const { orderId, customerId, paymentMethod, stateId } = event.payload;
+    const { orderId, customerId, stateId } = event.payload;
     if (!customerId) return;
-    const prepaid = paymentMethod === CommercePaymentMethod.PREPAID;
     await createCommerceNotification({
       eventKey: `order:${orderId}:created`,
       userId: customerId,
-      title: prepaid ? "Complete your payment" : "Order under review",
-      body: prepaid
-        ? "Your State Order is ready for secure Paystack payment."
-        : "Hook Operations will review your Pay-at-Handover request.",
+      title: "Complete your payment",
+      body: "Your State Order is ready for secure payment.",
       type: "order_created",
       data: { orderId, stateId },
     });
@@ -1144,8 +1009,6 @@ export class CheckoutService {
           key: "commerce",
           currency: "NGN",
           defaultDeliveryFeeMinor: DEFAULT_DELIVERY_FEE_MINOR,
-          podEnabled: false,
-          defaultPodLimitMinor: DEFAULT_POD_LIMIT_MINOR,
           previewTtlMinutes: 10,
           activePolicyVersions: {},
         },

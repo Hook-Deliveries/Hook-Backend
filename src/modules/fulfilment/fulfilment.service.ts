@@ -15,7 +15,6 @@ import { emitOutbox, processOutbox } from '@modules/platform';
 import { wakeOutbox } from '../../jobs/wake';
 import { FulfilmentTask, RunnerPackage, HubPackage, Consolidation, Shipment, PartnerCustody, ReturnRequest, FulfilmentRefund, LogisticsWebhookEvent, type LogisticsProviderKey } from '@models/fulfilment/fulfilment.model';
 import { Order } from '@models/orders/order.model';
-import { CommerceSettings } from '@models/commerce/commerce.model';
 import { LogisticsProviderService } from '@modules/fulfilment/logistics-provider.service';
 import { getPagination } from '@lib/api-utils';
 import { OrderItem } from '@models/orders/order-item.model';
@@ -176,16 +175,6 @@ function otherDetails(item: { selectedVariants?: Record<string, string>; variant
   return Object.entries(source)
     .filter(([key, value]) => key !== 'color' && key !== 'size' && value)
     .map(([key, value]) => `${key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}: ${value}`);
-}
-
-/** A failed/refused Pay on Delivery parcel counts against the customer; after the admin-set limit they lose the option until an admin restores it. */
-async function recordPodRefusal(orderId: string, session?: import('mongoose').ClientSession) {
-  const order = (await Order.findById(orderId).select('userId commercePaymentMethod').session(session ?? null).lean()) as { userId?: string; commercePaymentMethod?: string } | null;
-  if (!order?.userId || order.commercePaymentMethod !== 'PAY_AT_HANDOVER') return;
-  const settings = (await CommerceSettings.findOne({ key: 'commerce' }).select('podRefusalSuspendCount').lean()) as { podRefusalSuspendCount?: number } | null;
-  const limit = Math.max(1, Number(settings?.podRefusalSuspendCount ?? 2));
-  const user = (await User.findOneAndUpdate({ _id: order.userId }, { $inc: { podRefusals: 1 } }, { returnDocument: 'after', session, strict: false }).lean()) as { podRefusals?: number } | null;
-  if (user && Number(user.podRefusals || 0) >= limit) await User.updateOne({ _id: order.userId }, { $set: { podEligible: false } }, { session });
 }
 
 /** Orders store the partner's internal id, older ones the public id: match both. */
@@ -1658,7 +1647,6 @@ export class FulfilmentService {
     const legacy = (order.deliveryAddress || {}) as Record<string, any>;
     const chosen = (order.logisticsProviderSnapshot || {}) as { code?: string; name?: string };
     const receiptNumber = `RCT-${String(order.publicId).replace(/^ORD-/, '')}`;
-    const collectMinor = order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? Number(order.totalMinor || 0) : 0;
     return {
       receiptNumber,
       generatedAt: new Date().toISOString(),
@@ -1692,7 +1680,7 @@ export class FulfilmentService {
         details: otherDetails(item),
       })),
       courier: { code: shipment?.courierCode || chosen.code, name: shipment?.courierName || chosen.name, trackingNumber: shipment?.trackingNumber },
-      payment: { method: order.commercePaymentMethod, collectMinor },
+      payment: { method: order.commercePaymentMethod },
       shipment: shipment ? { publicId: shipment.publicId, status: shipment.status, version: shipment.version, events: (shipment.trackingEvents || []).map((event: any) => ({ status: event.status, at: event.at, note: event.note })) } : undefined,
       trackingSig: this.trackingSignature(receiptNumber),
       parcelOptions: consolidations.map((c) => ({ reference: c.publicId, sealedAt: c.sealedAt })),
@@ -1733,7 +1721,7 @@ export class FulfilmentService {
       recipient: { name: address.recipientName, city: address.cityName, state: address.stateName },
       items: items.map((item: any) => ({ title: item.productTitle, quantity: item.quantity, color: item.selectedVariants?.color || item.variantSnapshot?.color, size: item.selectedVariants?.size || item.variantSnapshot?.size, details: otherDetails(item) })),
       courier: { name: shipment?.courierName || order.logisticsProviderSnapshot?.name, trackingNumber: shipment?.trackingNumber },
-      payment: { method: order.commercePaymentMethod, collectMinor: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? Number(order.totalMinor || 0) : 0 },
+      payment: { method: order.commercePaymentMethod },
     };
   }
 
@@ -1819,7 +1807,7 @@ export class FulfilmentService {
     let shipment: any;
     try {
       shipment = await this.atomically(async (session) => {
-        const [created] = await Shipment.create([{ publicId: shipmentId, orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : provider === 'fez' ? 'Fez Delivery' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference || fezBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor ?? fezQuoteMinor, providerQuoteMinor: body.providerQuoteMinor ?? fezQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber || (fezBooking?.trackingNumber as string | undefined), trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), releaseStatus: order.commercePaymentMethod === 'PAY_AT_HANDOVER' ? 'AWAITING_HANDOVER_PAYMENT' : 'NOT_REQUIRED', bookingIdempotencyKey: body.idempotencyKey, version: 1 }], { session });
+        const [created] = await Shipment.create([{ publicId: shipmentId, orderId: order._id.toString(), fulfilmentGroupId: consolidation.fulfilmentGroupId, sourceStateId: consolidation.sourceStateId, hubId: consolidation.hubId, consolidationId: consolidation._id.toString(), provider, courierCode, courierName, substitutedFrom: substituting ? String(chosen.code) : undefined, substitutionReason: substituting ? String(body.substitutionReason).trim() : undefined, serviceName: body.serviceName || (provider === 'simulated' ? 'Hook Logistics Simulator' : provider === 'fez' ? 'Fez Delivery' : undefined), externalReference: body.externalReference || simulationBooking?.externalReference || fezBooking?.externalReference, status: ShipmentStatus.BOOKED_WITH_PROVIDER, deliveryAddressSnapshot, estimatedDeliveryAt: body.estimatedDeliveryAt ? new Date(body.estimatedDeliveryAt) : simulationBooking?.estimatedDeliveryAt ? new Date(String(simulationBooking.estimatedDeliveryAt)) : undefined, bookedAt: new Date(), providerCostMinor: body.providerCostMinor ?? fezQuoteMinor, providerQuoteMinor: body.providerQuoteMinor ?? fezQuoteMinor, trackingNumber: body.trackingNumber || simulationBooking?.trackingNumber || (fezBooking?.trackingNumber as string | undefined), trackingEvents: [{ status: 'BOOKED_WITH_PROVIDER', at: new Date(), actorId: actor.accountId, mode: provider === 'simulated' ? 'simulation' : undefined }], evidence: evidence(body.evidence), bookingIdempotencyKey: body.idempotencyKey, version: 1 }], { session });
         await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.READY_FOR_DISPATCH, customerProgress: [{ key: 'shipment', label: 'Shipment booked and awaiting pickup', at: new Date() }] }, $push: { timeline: timelineEntry('BOOKED_WITH_PROVIDER', actor.accountId) } }, { session });
         return created;
       });
@@ -1840,16 +1828,12 @@ export class FulfilmentService {
     const order = await Order.findById(shipment.orderId).select('commercePaymentMethod publicId version userId sourceStateId totalMinor').lean() as any;
     const next = String(body.status) as ShipmentStatus;
     if (!Object.values(ShipmentStatus).includes(next)) throw new HttpError(400, 'Invalid shipment status', undefined, 'VALIDATION_ERROR');
-    const allowed: Record<string, string[]> = { BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'AWAITING_HANDOVER_PAYMENT'], AWAITING_HANDOVER_PAYMENT: ['RELEASE_APPROVED'], RELEASE_APPROVED: ['DELIVERED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
+    const allowed: Record<string, string[]> = { BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
     if (shipment.status !== next && !allowed[shipment.status]?.includes(next)) throw new HttpError(409, 'Invalid shipment status transition', { current: shipment.status, next }, 'INVALID_STATE_TRANSITION');
-    if (next === ShipmentStatus.AWAITING_HANDOVER_PAYMENT && order?.commercePaymentMethod !== 'PAY_AT_HANDOVER') throw new HttpError(409, 'Only Pay-at-Handover shipments can require handover payment', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
-    if (next === ShipmentStatus.RELEASE_APPROVED && order?.commercePaymentMethod !== 'PAY_AT_HANDOVER') throw new HttpError(409, 'Only Pay-at-Handover shipments can be released through handover payment', undefined, 'PAYMENT_METHOD_NOT_ALLOWED');
-    if (next === ShipmentStatus.DELIVERED && shipment.releaseStatus === 'AWAITING_HANDOVER_PAYMENT') throw new HttpError(409, 'Verified Pay-at-Handover payment is required before release', undefined, 'PAYMENT_REQUIRED');
     let orderStatus: CommerceOrderStatus | undefined;
     const updated = await this.atomically(async (session) => {
-      const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, releaseStatus: next === ShipmentStatus.RELEASE_APPROVED ? 'RELEASE_APPROVED' : shipment.releaseStatus, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
+      const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (next === ShipmentStatus.DELIVERY_FAILED) await recordPodRefusal(String(shipment.orderId), session);
       if (shipment.fulfilmentGroupId) {
         const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
           : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
@@ -2463,7 +2447,6 @@ export class FulfilmentService {
       PICKED_UP: ShipmentStatus.PICKED_UP,
       IN_TRANSIT: ShipmentStatus.IN_TRANSIT,
       OUT_FOR_DELIVERY: ShipmentStatus.OUT_FOR_DELIVERY,
-      AWAITING_HANDOVER_PAYMENT: ShipmentStatus.AWAITING_HANDOVER_PAYMENT,
       DELIVERED: ShipmentStatus.DELIVERED,
       DELIVERY_FAILED: ShipmentStatus.DELIVERY_FAILED,
       RETURN_IN_TRANSIT: ShipmentStatus.RETURN_IN_TRANSIT,
@@ -2483,7 +2466,7 @@ export class FulfilmentService {
     // OUT_FOR_DELIVERY/DELIVERY_FAILED), and PICKED_UP allows RETURNED_TO_HOOK
     // directly, because Fez's coarser status vocabulary has no "out for
     // delivery" or "delivery failed" event of its own before Delivered/Returned.
-    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT', 'DELIVERED', 'RETURNED_TO_HOOK'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'AWAITING_HANDOVER_PAYMENT'], AWAITING_HANDOVER_PAYMENT: ['RELEASE_APPROVED'], RELEASE_APPROVED: ['DELIVERED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
+    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT', 'DELIVERED', 'RETURNED_TO_HOOK'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
     if (shipment.status === next) {
       // Already in this state (e.g. the provider re-sent it under a new event id): nothing to apply.
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } });
@@ -2499,7 +2482,6 @@ export class FulfilmentService {
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (next === ShipmentStatus.DELIVERY_FAILED) await recordPodRefusal(String(shipment.orderId), session);
       if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(next === ShipmentStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } }, { session });
       return moved;

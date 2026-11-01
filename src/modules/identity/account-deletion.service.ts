@@ -41,7 +41,7 @@ const FINISHED_ORDER_STATUSES = [
   CommerceOrderStatus.CANCELLED,
 ];
 /** Payment states meaning the customer has paid, or a payment is in flight. */
-const COMMITTED_PAYMENT_STATUSES = ['CONFIRMED', 'PAID', 'PROCESSING', 'DUE_AT_HANDOVER'];
+const COMMITTED_PAYMENT_STATUSES = ['CONFIRMED', 'PAID', 'PROCESSING'];
 const OPEN_REFUND_STATUSES = ['REQUESTED', 'APPROVED', 'PROVIDER_PENDING', 'PROVIDER_UNKNOWN'];
 const OPEN_RETURN_STATUSES = ['REQUESTED', 'UNDER_REVIEW', 'APPROVED', 'AWAITING_HANDOVER', 'RECEIVED'];
 const OPEN_REFUND_REQUEST_STATUSES = ['requested', 'under_review', 'approved', 'provider_pending'];

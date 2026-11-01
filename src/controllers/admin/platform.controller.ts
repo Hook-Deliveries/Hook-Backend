@@ -2010,6 +2010,25 @@ export class PlatformController {
     });
     sendSuccess(res, paginated(rows, total, page, limit));
   };
+  /** Counts and the entity types actually present, so the Audit Log filters never lag behind what the platform records. */
+  auditFacets = async (req: Request, res: Response) => {
+    await access(req, 'audit.view');
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const [total, today, entityTypes] = await Promise.all([
+      PlatformAuditLog.countDocuments({}),
+      PlatformAuditLog.countDocuments({ createdAt: { $gte: startOfToday } }),
+      PlatformAuditLog.aggregate([
+        { $group: { _id: '$entityType', count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
+    ]);
+    sendSuccess(res, {
+      total,
+      today,
+      entityTypes: entityTypes.filter((row) => row._id).map((row) => ({ value: String(row._id), count: Number(row.count) })),
+    });
+  };
   auditDetail = async (req: Request, res: Response) => {
     await access(req, 'audit.view');
     const event = await byIdentifier(PlatformAuditLog, routeParam(req.params.id));

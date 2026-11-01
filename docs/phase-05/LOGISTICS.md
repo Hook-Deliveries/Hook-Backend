@@ -1,4 +1,4 @@
-# Logistics And Pay-at-Handover
+# Logistics
 
 The logistics boundary is provider-neutral. Manual booking is available with an
 external reference, tracking number, quote/cost, evidence, and audit context.
@@ -22,6 +22,4 @@ production regardless of any client payload. The simulator never calls GIG or
 Fez and must not be used as evidence that those provider integrations are live.
 
 Booking leaves an Order `READY_FOR_DISPATCH`. Pickup or transit moves it to
-`IN_TRANSIT`. Pay-at-Handover shipments cannot be released or delivered while
-`releaseStatus` is `AWAITING_HANDOVER_PAYMENT`. A verified payment event must
-move the release state to `RELEASE_APPROVED` before delivery.
+`IN_TRANSIT`.

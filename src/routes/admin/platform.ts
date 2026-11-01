@@ -23,8 +23,6 @@ const stateSchema = z.object({
   currency: z.string().length(3).default('NGN'),
   deliveryPromiseHours: z.number().int().positive().default(24),
   operationsEnabled: z.boolean().default(false),
-  payAtHubEnabled: z.boolean().default(false),
-  payAtHubLimitMinor: z.number().int().nonnegative().default(10000000),
   configuration: z.record(z.string(), z.unknown()).optional(),
   reason,
 });
@@ -273,6 +271,7 @@ export function createPlatformAdminRouter() {
   router.post('/market-associate-assignments/:id/end', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
 
   router.get('/audit-logs', asyncHandler(controller.auditLogs));
+  router.get('/audit-logs/facets', asyncHandler(controller.auditFacets));
   router.get('/audit-logs/:id', asyncHandler(controller.auditDetail));
   router.get('/public-id-counters', asyncHandler(controller.counters));
   router.post('/public-id-counters/repair', validateBody(z.object({

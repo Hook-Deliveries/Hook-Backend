@@ -28,7 +28,6 @@ const domains: Record<string, string[]> = {
   app_releases: ['view', 'manage'],
   settings: ['view', 'manage'],
   audit: ['view'],
-  'commerce.pod': ['review', 'override', 'eligibility'],
   'commerce.payments': ['view', 'reconcile'],
   'commerce.outbox': ['view', 'replay'],
   'commerce.settings': ['view', 'manage'],
@@ -70,7 +69,7 @@ const operationsPermissions = PLATFORM_PERMISSION_KEYS.filter((key) =>
 const orderRead = ['orders.view', 'customers.view', 'reports.view'];
 const orderOperations = [...orderRead, 'orders.create', 'orders.edit', 'orders.cancel'];
 const commerceOperations = [
-  'commerce.pod.review', 'commerce.pod.eligibility', 'commerce.outbox.view',
+  'commerce.outbox.view',
   'fulfilment.view', 'fulfilment.manage', 'fulfilment.assign',
   'fulfilment.hub.view', 'fulfilment.hub.receive', 'fulfilment.hub.qc', 'fulfilment.consolidate',
   'logistics.view', 'logistics.book', 'logistics.manage', 'logistics.track',
@@ -108,8 +107,6 @@ const supportPermissions = [
   'refunds.view',
   'deletions.view',
   'deletions.manage',
-  'commerce.pod.review',
-  'commerce.pod.eligibility',
 ];
 const financePermissions = [
   'orders.view',

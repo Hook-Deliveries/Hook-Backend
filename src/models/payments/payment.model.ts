@@ -35,7 +35,6 @@ export interface Payment extends BaseEntity {
     | "PROCESSING"
     | "CONFIRMED"
     | "FAILED"
-    | "DUE_AT_HANDOVER"
     | "REFUND_PENDING"
     | "REFUNDED";
   providerEventId?: string;
@@ -93,7 +92,6 @@ const PaymentSchema = createSchema<Payment>({
       "PROCESSING",
       "CONFIRMED",
       "FAILED",
-      "DUE_AT_HANDOVER",
       "REFUND_PENDING",
       "REFUNDED",
     ],

@@ -46,3 +46,7 @@ temp/
 .backups/
 
 deploy/certs/
+
+# Local credentials
+.super-admin-credentials
+.launch-credentials

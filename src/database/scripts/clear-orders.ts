@@ -1,6 +1,6 @@
 import mongoose, { Model } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
-import { CheckoutPreview, IntegrationException, PaymentWebhookEvent, PodCallRecord, PodOverride } from '@models/commerce/commerce.model';
+import { CheckoutPreview, IntegrationException, PaymentWebhookEvent } from '@models/commerce/commerce.model';
 import { CommerceOutboxEvent } from '@modules/platform/outbox.model';
 import { Consolidation, FulfilmentRefund, FulfilmentTask, HubPackage, LogisticsWebhookEvent, PartnerCustody, PickupManifest, ReturnRequest, RunnerPackage, Shipment } from '@models/fulfilment/fulfilment.model';
 import { Logistics } from '@models/logistics/logistics.model';
@@ -54,8 +54,6 @@ async function main() {
     { label: 'Runner packages', model: RunnerPackage, filter: { orderId: { $in: orderRefs } } },
     { label: 'Fulfilment tasks', model: FulfilmentTask, filter: { orderId: { $in: orderRefs } } },
     { label: 'Legacy logistics', model: Logistics, filter: { orderId: { $in: orderRefs } } },
-    { label: 'POD overrides', model: PodOverride, filter: { orderId: { $in: orderRefs } } },
-    { label: 'POD call records', model: PodCallRecord, filter: { orderId: { $in: orderRefs } } },
     { label: 'Commerce outbox events', model: CommerceOutboxEvent, filter: { aggregateId: { $in: orderRefs } } },
     { label: 'Legacy refund requests', model: RefundRequest, filter: { orderId: { $in: orderRefs } } },
     { label: 'Legacy vendor fulfilments', model: VendorFulfilment, filter: { orderId: { $in: orderRefs } } },

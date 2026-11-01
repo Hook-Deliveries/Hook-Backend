@@ -30,8 +30,6 @@ progress and can submit an eligible issue.
   transitions and integration-event state capture.
 - Partner custody receipt/release with hashed, limited-attempt collection codes
   and a seven-day custody window.
-- Pay-at-Handover payment confirmation releases the shipment only after verified
-  payment evidence; it does not create duplicate fulfilment events.
 - Customer fulfilment progress and 24-hour return request entry points.
 - Refund request and Paystack provider-processing paths with captured-balance
   limits, idempotency-key matching, provider reference persistence, and failure

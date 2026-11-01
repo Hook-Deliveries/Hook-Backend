@@ -137,18 +137,12 @@ export const checkoutSettingsSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
-/** Pay on Delivery rules and VAT. Every field optional so the admin can change one at a time; a reason is always required. */
-export const podConfigSchema = z.object({
-  podEnabled: z.boolean().optional(),
-  podMinimumOrderMinor: z.coerce.number().int().min(0).max(1_000_000_000).optional(),
-  podSurchargeType: z.enum(['flat', 'percent']).optional(),
-  podSurchargeValue: z.coerce.number().min(0).max(100_000_000).optional(),
-  defaultPodLimitMinor: z.coerce.number().int().min(0).max(10_000_000_000).optional(),
-  podAutoApproveEnabled: z.boolean().optional(),
-  podRefusalSuspendCount: z.coerce.number().int().min(1).max(20).optional(),
+/** Pricing the admin controls: VAT and the platform default delivery fee. Every field optional; a reason is always required. */
+export const pricingConfigSchema = z.object({
   vatRatePercent: z.coerce.number().min(0).max(30).optional(),
+  defaultDeliveryFeeMinor: z.coerce.number().int().min(0).max(100_000_000).optional(),
   reason: z.string().trim().min(5).max(500),
-}).strict().refine((value) => value.podSurchargeType !== 'percent' || value.podSurchargeValue === undefined || value.podSurchargeValue <= 50, { message: 'A percentage surcharge cannot exceed 50%', path: ['podSurchargeValue'] });
+}).strict();
 
 export const inventorySettingsSchema = z.object({
   lowStockThreshold: z.coerce.number().int().min(0).max(100),
@@ -196,26 +190,9 @@ export const adminOrderCancelSchema = z.object({
   reason: z.string().trim().min(3).max(500),
 }).strict();
 
-export const podCallSchema = z
-  .object({
-    outcome: z.enum(["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"]),
-    notes: z.string().trim().max(1000).optional(),
-  })
-  .strict();
-export const podDecisionSchema = z
-  .object({
-    decision: z.enum(["APPROVE", "PREPAYMENT_REQUIRED", "CANCELLED"]),
-    reason: z.string().trim().min(5).max(1000),
-  })
-  .strict();
-export const podOverrideSchema = z
-  .object({ reason: z.string().trim().min(10).max(1000) })
-  .strict();
 export const commerceSettingsSchema = z
   .object({
     defaultDeliveryFeeMinor: z.number().int().min(0).optional(),
-    podEnabled: z.boolean().optional(),
-    defaultPodLimitMinor: z.number().int().min(0).optional(),
     previewTtlMinutes: z.number().int().min(2).max(30).optional(),
   })
   .strict();

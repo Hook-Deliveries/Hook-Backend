@@ -9,6 +9,7 @@ import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
 import { AuthService } from '@modules/identity/auth.service';
 import type { SessionMetadata } from '@modules/identity/account-session.service';
+import { recordSignInAudit } from '@modules/platform/platform-audit.service';
 import { sendCreated, sendSuccess } from '@utils/http';
 
 function sessionMetadata(req: Request): SessionMetadata {
@@ -47,7 +48,14 @@ export class AuthController {
     const portal = requestedPortal === 'staff' || requestedPortal === 'customer'
       ? requestedPortal
       : 'auto';
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, portal, sessionMetadata(req)));
+    try {
+      const session = await this.auth.login(req.body.email, req.body.password, portal, sessionMetadata(req));
+      if (portal !== 'customer') await recordSignInAudit(req, req.body.email, 'success');
+      sendSuccess(res, session);
+    } catch (error) {
+      if (portal !== 'customer') await recordSignInAudit(req, req.body.email, 'failed', error instanceof Error ? error.message : undefined);
+      throw error;
+    }
   };
 
   googleLogin = async (req: Request, res: Response) => {

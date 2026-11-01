@@ -168,7 +168,7 @@ export class AccountErasureService {
     const unpaid: any[] = await Order.find({
       userId,
       commerceStatus: { $in: ['AWAITING_PAYMENT', 'PENDING'] },
-      commercePaymentStatus: { $nin: ['CONFIRMED', 'PAID', 'PROCESSING', 'DUE_AT_HANDOVER'] },
+      commercePaymentStatus: { $nin: ['CONFIRMED', 'PAID', 'PROCESSING'] },
     } as any).select('_id').lean();
     for (const { _id } of unpaid) {
       const session = await mongoose.startSession();
@@ -282,7 +282,6 @@ export class AccountErasureService {
           isActive: false,
           isEmailVerified: false,
           isPhoneVerified: false,
-          podEligible: false,
           accountStatus: AccountStatus.ANONYMIZED,
           deletedAt: new Date(),
         },

@@ -8,7 +8,7 @@ const DUMMY_FAQS: Array<{ question: string; answer: string }> = [
   { question: 'How do refunds work?', answer: 'Refunds are issued to the original payment method or as Hook credit, depending on the order. Most refunds are processed within 3-5 business days once approved.' },
   { question: 'How do I change or cancel an order?', answer: 'Orders can be changed or cancelled before a Market Associate confirms sourcing. Contact support with your order number as soon as possible.' },
   { question: 'How do I delete my account?', answer: 'Go to Profile > Delete account in the Hook app. You can cancel the request any time during the cooling-off period before it takes effect.' },
-  { question: 'What payment methods does Hook accept?', answer: 'Hook accepts card payments, bank transfer, and Pay on Delivery in eligible states. You can also pay with Hook credit earned from past orders and referrals.' },
+  { question: 'What payment methods does Hook accept?', answer: 'Hook accepts card payments and bank transfer, all paid securely online. You can also pay with Hook credit earned from past orders and referrals.' },
   { question: 'How do I become a Hook Partner or Market Associate?', answer: 'Reach out to support with your name, phone number, and the state you operate in — our operations team will follow up with next steps.' },
 ];
 

@@ -65,7 +65,7 @@ export function createPublicGeographyRouter() {
       return;
     }
     const states = await OperationState.find({ countryCode: 'NG', status: 'active', deliveryEnabled: { $ne: false } })
-      .select('publicId name capitalName code timezone currency deliveryPromiseHours payAtHubEnabled deliveryEnabled')
+      .select('publicId name capitalName code timezone currency deliveryPromiseHours deliveryEnabled')
       .sort({ name: 1 }).lean({ virtuals: true });
     const response = states.map((state: any) => ({
       publicId: state.publicId,
@@ -75,7 +75,6 @@ export function createPublicGeographyRouter() {
       timezone: state.timezone,
       currency: state.currency,
       deliveryPromiseHours: state.deliveryPromiseHours,
-      payAtHubEnabled: state.payAtHubEnabled,
       deliveryEnabled: state.deliveryEnabled !== false,
     }));
     await lookup.store(response);
@@ -138,7 +137,7 @@ export function createPublicGeographyRouter() {
     sendSuccess(res, response);
   }));
   router.get('/markets/:id/categories', asyncHandler(async (req, res) => {
-    const cacheKey = `public:market-categories:${req.params.id}`;
+    const cacheKey = `public:market-categories:v2:${req.params.id}`;
     const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
     if (lookup.hit) {
       sendSuccess(res, lookup.value);
@@ -153,19 +152,18 @@ export function createPublicGeographyRouter() {
       ]),
       categoryService.tree(),
     ]);
-    const categoryIds = counts.map((item: any) => item._id);
     const countMap = new Map(counts.map((item: any) => [String(item._id), item.count]));
-    // Products sit in sub-categories, so show the top-level categories that
-    // contain any, with the rolled-up count and the sub-categories present.
+    // Products sit in sub-categories. Every category is listed, stocked ones first, each with its
+    // rolled-up count (0 when this market has none yet) and its sub-categories.
     const response = tree
       .map((root: any) => {
         const children = (root.children || [])
           .map((child: any) => ({ ...child, productCount: countMap.get(child.internalId) || 0 }))
-          .filter((child: any) => child.productCount > 0);
+          .sort((left: any, right: any) => Number(right.productCount > 0) - Number(left.productCount > 0));
         const own = countMap.get(root.internalId) || 0;
         return { root, children, productCount: own + children.reduce((sum: number, child: any) => sum + child.productCount, 0) };
       })
-      .filter((entry: any) => entry.productCount > 0 && categoryIds.length)
+      .sort((left: any, right: any) => Number(right.productCount > 0) - Number(left.productCount > 0))
       .map(({ root, children, productCount }: any) => ({
         publicId: root.publicId,
         name: root.name,

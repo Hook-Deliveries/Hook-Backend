@@ -12,13 +12,7 @@ export interface OperationState extends BaseEntity {
   timezone: string;
   currency: string;
   deliveryPromiseHours: number;
-  payAtHubEnabled: boolean;
-  payAtHubLimitMinor: number;
   deliveryFeeMinor?: number;
-  podEnabled?: boolean;
-  podLimitMinor?: number;
-  /** The smallest order that may use Pay on Delivery in this State; falls back to the global minimum. */
-  podMinimumOrderMinor?: number;
   deliveryEnabled: boolean;
   operationsEnabled: boolean;
   deliveryPricingRuleId?: string;
@@ -57,10 +51,6 @@ export interface ServiceZone extends BaseEntity {
   geometry?: Record<string, unknown>;
   deliveryEligible: boolean;
   deliveryFeeMinor?: number;
-  podEnabled?: boolean;
-  podLimitMinor?: number;
-  /** The smallest order that may use Pay on Delivery in this State; falls back to the global minimum. */
-  podMinimumOrderMinor?: number;
   deliveryPricingRuleId?: string;
 }
 
@@ -74,12 +64,7 @@ const stateSchema = createSchema<OperationState>({
   timezone: { type: String, default: 'Africa/Lagos' },
   currency: { type: String, default: 'NGN' },
   deliveryPromiseHours: { type: Number, default: 24, min: 1 },
-  payAtHubEnabled: { type: Boolean, default: false },
-  payAtHubLimitMinor: { type: Number, default: 10000000, min: 0 },
   deliveryFeeMinor: { type: Number, min: 0 },
-  podEnabled: { type: Boolean, default: false },
-  podLimitMinor: { type: Number, min: 0 },
-  podMinimumOrderMinor: { type: Number, min: 0 },
   deliveryEnabled: { type: Boolean, default: true, index: true },
   operationsEnabled: { type: Boolean, default: false, index: true },
   deliveryPricingRuleId: { type: String, index: true, sparse: true },
@@ -122,9 +107,6 @@ const zoneSchema = createSchema<ServiceZone>({
   geometry: { type: Object },
   deliveryEligible: { type: Boolean, default: false, index: true },
   deliveryFeeMinor: { type: Number, min: 0 },
-  podEnabled: { type: Boolean, default: false },
-  podLimitMinor: { type: Number, min: 0 },
-  podMinimumOrderMinor: { type: Number, min: 0 },
   deliveryPricingRuleId: { type: String, index: true, sparse: true },
 });
 zoneSchema.index({ cityId: 1, code: 1 }, { unique: true });

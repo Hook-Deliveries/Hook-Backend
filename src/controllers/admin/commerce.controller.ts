@@ -18,7 +18,6 @@ import { Payment } from '@models/payments/payment.model';
 import { PaymentAttempt } from '@models/payments/payment-link.model';
 import { User } from '@models/users/user.model';
 import { isValidObjectId } from 'mongoose';
-import { PodService } from '@modules/payments/pod.service';
 import { recordAudit } from '@modules/platform/platform-audit.service';
 import { paymentProviderReadiness } from '@modules/payments/providers/provider-registry';
 import { clearInventorySettingsCache } from '@modules/catalog/inventory-settings.service';
@@ -27,7 +26,6 @@ import { sharedCache } from '@modules/platform/cache.service';
 
 export class AdminCommerceController {
   private paymentService = new PaymentService(adminRepos.payments(), adminRepos.orders(), adminRepos.escrowLedger());
-  private pod = new PodService();
 
   deletionRequests = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
@@ -109,79 +107,6 @@ export class AdminCommerceController {
     sendSuccess(res, request);
   };
 
-  podQueue = async (req: Request, res: Response) => {
-    const filter: Record<string, unknown> = {
-      commercePaymentMethod: 'PAY_AT_HANDOVER',
-      commerceStatus: { $in: ['VERIFICATION_PENDING', 'OPERATIONS_REVIEW'] },
-    };
-    if (req.user?.scopeType !== 'global')
-      filter.sourceStateId = { $in: req.user?.assignedStateIds || [] };
-    sendSuccess(
-      res,
-      await Order.find(filter)
-        .sort({ createdAt: 1 })
-        .limit(100)
-        .lean({ virtuals: true }),
-    );
-  };
-  recordCall = async (req: Request, res: Response) => {
-    const result = await this.pod.recordCall(
-      routeParam(req.params.id),
-      req.user!.sub,
-      req.body.outcome,
-      req.body.notes,
-    );
-    await recordAudit(req, {
-      action: 'commerce.pod.call',
-      entityType: 'order',
-      entityId: routeParam(req.params.id),
-      after: req.body,
-    });
-    sendSuccess(res, result);
-  };
-  decide = async (req: Request, res: Response) => {
-    const result = await this.pod.decide(
-      routeParam(req.params.id),
-      req.user!.sub,
-      req.body.decision,
-      req.body.reason,
-    );
-    await recordAudit(req, {
-      action: `commerce.pod.${req.body.decision.toLowerCase()}`,
-      entityType: 'order',
-      entityId: routeParam(req.params.id),
-      reason: req.body.reason,
-    });
-    sendSuccess(res, result);
-  };
-  override = async (req: Request, res: Response) => {
-    const result = await this.pod.override(
-      routeParam(req.params.id),
-      req.user!.sub,
-      req.body.reason,
-    );
-    await recordAudit(req, {
-      action: 'commerce.pod.override',
-      entityType: 'order',
-      entityId: routeParam(req.params.id),
-      reason: req.body.reason,
-    });
-    sendSuccess(res, result);
-  };
-  restoreEligibility = async (req: Request, res: Response) => {
-    const result = await this.pod.restoreCustomer(
-      routeParam(req.params.id),
-      req.user!.sub,
-      req.body.reason,
-    );
-    await recordAudit(req, {
-      action: 'commerce.pod.eligibility_restore',
-      entityType: 'customer',
-      entityId: routeParam(req.params.id),
-      reason: req.body.reason,
-    });
-    sendSuccess(res, result);
-  };
   /** Paginated payments with the order and customer resolved, avoiding an N+1 fetch per row. */
   payments = async (req: Request, res: Response) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -323,10 +248,15 @@ export class AdminCommerceController {
     // A second replay finds the event no longer dead-lettered: report, don't fail.
     sendSuccess(res, result);
   };
-  podSettings = async (_req: Request, res: Response) =>
-    sendSuccess(res, await this.pod.getSettings());
-  updatePodSettings = async (req: Request, res: Response) => {
-    const result = await this.pod.updateSettings(req.user!.sub, req.body);
+  settings = async (_req: Request, res: Response) =>
+    sendSuccess(res, await CommerceSettings.findOne({ key: 'commerce' }).lean({ virtuals: true }));
+  updateSettings = async (req: Request, res: Response) => {
+    const result = await CommerceSettings.findOneAndUpdate(
+      { key: 'commerce' },
+      { $set: { ...req.body, updatedBy: req.user!.sub } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean({ virtuals: true });
+    CheckoutService.clearSettingsCache();
     await recordAudit(req, {
       action: 'commerce.settings.update',
       entityType: 'commerce_settings',
@@ -401,23 +331,16 @@ export class AdminCommerceController {
     sendSuccess(res, { lowStockThreshold: updated?.lowStockThreshold });
   };
 
-  podConfig = async (_req: Request, res: Response) => {
+  pricingConfig = async (_req: Request, res: Response) => {
     const s = await CommerceSettings.findOne({ key: 'commerce' }).lean();
     sendSuccess(res, {
-      podEnabled: s?.podEnabled ?? false,
-      podMinimumOrderMinor: s?.podMinimumOrderMinor ?? 3000000,
-      podSurchargeType: s?.podSurchargeType ?? 'flat',
-      podSurchargeValue: s?.podSurchargeValue ?? 0,
-      defaultPodLimitMinor: s?.defaultPodLimitMinor ?? 10000000,
-      podAutoApproveEnabled: s?.podAutoApproveEnabled ?? true,
-      podRefusalSuspendCount: s?.podRefusalSuspendCount ?? 2,
       vatRatePercent: s?.vatRatePercent ?? 7.5,
       defaultDeliveryFeeMinor: s?.defaultDeliveryFeeMinor ?? 300000,
       updatedAt: s?.updatedAt,
     });
   };
 
-  updatePodConfig = async (req: Request, res: Response) => {
+  updatePricingConfig = async (req: Request, res: Response) => {
     const { reason, ...fields } = req.body as Record<string, unknown>;
     const changes = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
     const before = await CommerceSettings.findOne({ key: 'commerce' }).lean();
@@ -428,7 +351,7 @@ export class AdminCommerceController {
     ).lean();
     CheckoutService.clearSettingsCache();
     await recordAudit(req, {
-      action: 'commerce.pod_config.update',
+      action: 'commerce.pricing_config.update',
       entityType: 'commerce_settings',
       before: Object.fromEntries(Object.keys(changes).map((key) => [key, (before as Record<string, unknown> | null)?.[key]])),
       after: changes,

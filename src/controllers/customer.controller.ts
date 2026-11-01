@@ -9,7 +9,6 @@ import { Order } from "@models/orders/order.model";
 import { Payment } from "@models/payments/payment.model";
 import { EscrowLedger } from "@models/payments/escrow-ledger.model";
 import { Product } from "@models/products/product.model";
-import { User } from "@models/users/user.model";
 import { DeviceToken } from "@models/notifications/device-token.model";
 import { Notification } from "@models/notifications/notification.model";
 import { AccountDeletionRequest } from "@models/support/account-deletion-request.model";
@@ -214,12 +213,6 @@ export class CustomerController {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
       currency: settings?.currency || "NGN",
-      // Pay on Delivery is an admin setting now (and per state): no code-level pause.
-      podEnabled: settings?.podEnabled || false,
-      podPaused: false,
-      podMinimumOrderMinor: settings?.podMinimumOrderMinor ?? 3000000,
-      podSurchargeType: settings?.podSurchargeType || "flat",
-      podSurchargeValue: settings?.podSurchargeValue ?? 0,
       vatRatePercent: settings?.vatRatePercent ?? 7.5,
       policyVersions: settings?.activePolicyVersions || {},
       orderEarnEnabled: settings?.orderEarnEnabled ?? true,

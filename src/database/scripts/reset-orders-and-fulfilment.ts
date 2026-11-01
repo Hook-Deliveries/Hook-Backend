@@ -23,7 +23,7 @@ const ORDER_COLLECTIONS = [
   'checkoutpreviews', 'checkoutevents', 'commerceoutboxevents', 'commerceimports', 'idempotencyrecords',
   'consolidations', 'fulfilmenttasks', 'fulfilmentexceptions', 'fulfilmentrefunds', 'hubpackages', 'runnerpackages', 'shipments',
   'pickupmanifests', 'partnercustodies', 'vendorfulfilments', 'vendorcollections', 'vendorpaymentrecords', 'itemresolutions',
-  'refundrequests', 'returnrequests', 'settlements', 'escrowledgers', 'podcallrecords', 'podoverrides', 'couponredemptions',
+  'refundrequests', 'returnrequests', 'settlements', 'escrowledgers', 'couponredemptions',
   'logisticswebhookevents', 'integrationexceptions', 'negotiatedquotes',
 ];
 const ORDER_NOTIFICATION_TYPES = ['hub_qc_passed', 'hub_qc_failed', 'order_created', 'order_assigned', 'order_updated', 'payment_pending', 'payment_confirmed', 'order_shipped', 'order_delivered', 'order_cancelled', 'refund_processed', 'refund_requested', 'return_update'];

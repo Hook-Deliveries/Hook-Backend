@@ -37,10 +37,6 @@ export class PaymentLinkService {
     if (order.commerceStatus === "CANCELLED" || order.commercePaymentStatus === CommercePaymentStatus.CONFIRMED) {
       throw new HttpError(409, "This Order no longer requires payment", undefined, "PAYMENT_INITIALIZATION_NOT_ALLOWED");
     }
-    // The online delivery fee of a Pay on Delivery order belongs to the order, so it needs no delivery selected.
-    if (order.commercePaymentMethod === "PAY_AT_HANDOVER" && !fulfilmentGroupId && order.commerceStatus !== "AWAITING_DELIVERY_FEE") {
-      throw new HttpError(400, "A delivery payment must be selected", undefined, "FULFILMENT_GROUP_REQUIRED");
-    }
     const payment = await Payment.findOne({
       orderId: String(order._id),
       // A substitution top-up's Payment also has no fulfilmentGroupId, so it must be excluded explicitly here — otherwise this could match the wrong Payment.

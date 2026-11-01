@@ -11,7 +11,6 @@
  */
 const CUSTOMER_STATUS_LABELS: Record<string, string> = {
   AWAITING_PAYMENT: 'Awaiting payment',
-  AWAITING_DELIVERY_FEE: 'Pay delivery fee',
   VERIFICATION_PENDING: 'Payment review',
   OPERATIONS_REVIEW: 'Order confirmed',
   APPROVED_FOR_FULFILMENT: 'Preparing your order',
@@ -46,7 +45,6 @@ export function customerStatusLabel(status: unknown) {
  */
 const CUSTOMER_STATUS_DETAIL: Record<string, string> = {
   AWAITING_PAYMENT: 'Complete your payment and we will start sourcing right away.',
-  AWAITING_DELIVERY_FEE: 'Pay the delivery fee now. You pay the rest when your order arrives.',
   VERIFICATION_PENDING: 'We are reviewing your payment. This is usually quick.',
   OPERATIONS_REVIEW: 'Your order is confirmed and queued for sourcing.',
   APPROVED_FOR_FULFILMENT: 'Payment is settled. We are getting your order ready.',

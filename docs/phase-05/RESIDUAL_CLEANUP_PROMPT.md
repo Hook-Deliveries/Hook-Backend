@@ -7,7 +7,7 @@ Remove any remaining active consumer, route, permission, seed fixture, or
 navigation entry only after import and data-reference evidence is recorded.
 
 Recheck task and package idempotency, outbox replay, state and Hub scope,
-Pay-at-Handover release gating, Partner custody code limits, return windows,
+Partner custody code limits, return windows,
 captured-balance refund limits, and provider integration exceptions. Preserve
 legacy collections and user-owned configuration unless a later approved phase
 provides a verified replacement.

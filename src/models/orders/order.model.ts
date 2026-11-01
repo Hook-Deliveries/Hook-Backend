@@ -14,10 +14,9 @@ export interface Order extends BaseEntity {
   fulfilmentGroupIds?: string[];
   initiatingPartnerId?: string;
   deliveryMethod?: "HOME_DELIVERY" | "PARTNER_PICKUP";
-  commercePaymentMethod?: "PREPAID" | "PAY_AT_HANDOVER";
+  commercePaymentMethod?: "PREPAID";
   commerceStatus?:
     | "AWAITING_PAYMENT"
-    | "AWAITING_DELIVERY_FEE"
     | "VERIFICATION_PENDING"
     | "OPERATIONS_REVIEW"
     | "APPROVED_FOR_FULFILMENT"
@@ -40,7 +39,6 @@ export interface Order extends BaseEntity {
     | "PROCESSING"
     | "CONFIRMED"
     | "FAILED"
-    | "DUE_AT_HANDOVER"
     | "REFUND_PENDING"
     | "REFUNDED";
   subtotalMinor?: number;
@@ -64,10 +62,6 @@ export interface Order extends BaseEntity {
   timeline?: Array<Record<string, unknown>>;
   checkoutPreviewId?: string;
   idempotencyKey?: string;
-  podReview?: Record<string, unknown>;
-  /** Pay on Delivery: paid online up front (delivery fee plus surcharge), and whether it has been paid. */
-  podFeeDueNowMinor?: number;
-  podFeePaid?: boolean;
   orderCode: string;
   userId?: string;
   guestId?: string;
@@ -142,14 +136,13 @@ const OrderSchema = createSchema<Order>({
   deliveryMethod: { type: String, enum: ["HOME_DELIVERY", "PARTNER_PICKUP"] },
   commercePaymentMethod: {
     type: String,
-    enum: ["PREPAID", "PAY_AT_HANDOVER"],
+    enum: ["PREPAID"],
     index: true,
   },
   commerceStatus: {
     type: String,
     enum: [
       "AWAITING_PAYMENT",
-      "AWAITING_DELIVERY_FEE",
       "VERIFICATION_PENDING",
       "OPERATIONS_REVIEW",
       "APPROVED_FOR_FULFILMENT",
@@ -177,7 +170,6 @@ const OrderSchema = createSchema<Order>({
       "PROCESSING",
       "CONFIRMED",
       "FAILED",
-      "DUE_AT_HANDOVER",
       "REFUND_PENDING",
       "REFUNDED",
     ],
@@ -204,9 +196,6 @@ const OrderSchema = createSchema<Order>({
   timeline: { type: [Object], default: [] },
   checkoutPreviewId: { type: String, unique: true, sparse: true, index: true },
   idempotencyKey: { type: String, unique: true, sparse: true },
-  podReview: { type: Object },
-  podFeeDueNowMinor: { type: Number, default: 0 },
-  podFeePaid: { type: Boolean, default: false },
   orderCode: { type: String, required: true, unique: true, index: true },
   userId: { type: String, index: true },
   guestId: { type: String, index: true },

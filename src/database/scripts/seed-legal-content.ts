@@ -15,7 +15,7 @@ ${PLACEHOLDER_NOTICE}
 <h2>2. What Hook does</h2>
 <p>Hook sources products from physical markets through our network of Market Associates and Hook Partners, and coordinates delivery to you. Prices, availability, and delivery times shown in the app are estimates and may change based on market conditions.</p>
 <h2>3. Orders and payment</h2>
-<p>All orders are subject to acceptance and product availability. Payment is processed securely through our payment partners. For orders with pay-on-delivery, you agree to be present and available at the agreed delivery location and time.</p>
+<p>All orders are subject to acceptance and product availability. Payment is processed securely through our payment partners. You agree to be reachable at the delivery address you provide so your order can be handed over.</p>
 <h2>4. Negotiated prices</h2>
 <p>Where negotiation is available, any price you agree to through the app is binding once confirmed and will be honoured for the negotiated item and quantity within the stated validity window.</p>
 <h2>5. Returns and refunds</h2>

@@ -199,7 +199,7 @@ export class PublicController {
       status: 'active',
       operationsEnabled: true,
     })
-      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours podEnabled podLimitMinor podMinimumOrderMinor')
+      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours')
       .sort({ name: 1 })
       .lean({ virtuals: true });
     sendSuccess(res, (states as any[]).map((state) => ({
@@ -211,9 +211,6 @@ export class PublicController {
       deliveryEnabled: state.deliveryEnabled !== false,
       deliveryFeeMinor: state.deliveryFeeMinor,
       deliveryPromiseHours: state.deliveryPromiseHours,
-      podEnabled: state.podEnabled === true,
-      podLimitMinor: state.podLimitMinor ?? null,
-      podMinimumOrderMinor: state.podMinimumOrderMinor ?? null,
     })));
   };
 

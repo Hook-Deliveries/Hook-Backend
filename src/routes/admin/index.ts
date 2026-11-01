@@ -73,15 +73,12 @@ import {
   emailSettingsSchema,
   inventorySettingsSchema,
   checkoutSettingsSchema,
-  podConfigSchema,
   hookCoinSettingsSchema,
   adminOrderUpdateSchema,
   adminOrderCancelSchema,
   adminOrderSplitSchema,
   paymentProviderSettingsSchema,
-  podCallSchema,
-  podDecisionSchema,
-  podOverrideSchema,
+  pricingConfigSchema,
 } from "@validations/commerce.schemas";
 import { z } from "zod";
 import { FulfilmentController } from "@controllers/fulfilment.controller";
@@ -607,35 +604,6 @@ export function createAdminRouter() {
     asyncHandler(orders.cancel),
   );
   router.get(
-    "/commerce/pod",
-    requirePermission("commerce.pod.review"),
-    asyncHandler(commerce.podQueue),
-  );
-  router.post(
-    "/commerce/pod/:id/calls",
-    requirePermission("commerce.pod.review"),
-    validateBody(podCallSchema),
-    asyncHandler(commerce.recordCall),
-  );
-  router.post(
-    "/commerce/pod/:id/decision",
-    requirePermission("commerce.pod.review"),
-    validateBody(podDecisionSchema),
-    asyncHandler(commerce.decide),
-  );
-  router.post(
-    "/commerce/pod/:id/override",
-    requireSuperAdmin,
-    validateBody(podOverrideSchema),
-    asyncHandler(commerce.override),
-  );
-  router.post(
-    "/commerce/customers/:id/pod-eligibility/restore",
-    requirePermission("commerce.pod.eligibility"),
-    validateBody(z.object({ reason: z.string().min(10).max(1000) }).strict()),
-    asyncHandler(commerce.restoreEligibility),
-  );
-  router.get(
     "/commerce/payments",
     requirePermission("commerce.payments.view"),
     asyncHandler(commerce.payments),
@@ -668,13 +636,13 @@ export function createAdminRouter() {
   router.get(
     "/commerce/settings",
     requireSuperAdmin,
-    asyncHandler(commerce.podSettings),
+    asyncHandler(commerce.settings),
   );
   router.patch(
     "/commerce/settings",
     requireSuperAdmin,
     validateBody(commerceSettingsSchema),
-    asyncHandler(commerce.updatePodSettings),
+    asyncHandler(commerce.updateSettings),
   );
   router.get(
     "/commerce/payment-providers",
@@ -688,15 +656,15 @@ export function createAdminRouter() {
     asyncHandler(commerce.updatePaymentProviders),
   );
   router.get(
-    "/commerce/pod-config",
+    "/commerce/pricing-config",
     requirePermission("commerce.settings.view"),
-    asyncHandler(commerce.podConfig),
+    asyncHandler(commerce.pricingConfig),
   );
   router.patch(
-    "/commerce/pod-config",
+    "/commerce/pricing-config",
     requirePermission("commerce.settings.manage"),
-    validateBody(podConfigSchema),
-    asyncHandler(commerce.updatePodConfig),
+    validateBody(pricingConfigSchema),
+    asyncHandler(commerce.updatePricingConfig),
   );
   router.get(
     "/commerce/checkout-settings",
@@ -972,11 +940,8 @@ export function createAdminRouter() {
   router.patch('/delivery/states/:id', requireAnyPermission('delivery.coverage.manage', 'delivery.pricing.manage'), validateBody(z.object({
     deliveryEnabled: z.boolean().optional(),
     deliveryFeeMinor: z.number().int().nonnegative().max(100_000_000).optional(),
-    podEnabled: z.boolean().optional(),
-    podLimitMinor: z.number().int().nonnegative().max(10_000_000_000).nullable().optional(),
-    podMinimumOrderMinor: z.number().int().nonnegative().max(10_000_000_000).nullable().optional(),
     reason: z.string().trim().min(3).max(500).optional(),
-  }).strict().refine((body) => body.deliveryEnabled !== undefined || body.deliveryFeeMinor !== undefined || body.podEnabled !== undefined || body.podLimitMinor !== undefined || body.podMinimumOrderMinor !== undefined, { message: 'Nothing to update' })), asyncHandler(delivery.toggleState));
+  }).strict().refine((body) => body.deliveryEnabled !== undefined || body.deliveryFeeMinor !== undefined, { message: 'Nothing to update' })), asyncHandler(delivery.toggleState));
   router.post('/delivery/locations/refresh', requirePermission('delivery.coverage.manage'), validateBody(z.object({
     reason: z.string().trim().min(3).max(500).optional(),
   }).strict()), asyncHandler(delivery.refreshLocations));

@@ -22,7 +22,6 @@ import { Payment } from "@models/payments/payment.model";
 import { PaymentLink } from "@models/payments/payment-link.model";
 import { CommerceOrderStatus } from "@lib/constants";
 import { appendTimeline, notifyStatus } from "@lib/order-timeline";
-import { PaymentService } from "@modules/payments/payment.service";
 import { restoreOrderIncentives } from "@modules/orders/order-restoration.service";
 import { splitOrderIntoGroups } from "@modules/orders/order-split.service";
 import { createCommerceNotification } from "@modules/notifications/commerce-notification.service";
@@ -279,8 +278,6 @@ export class AdminOrdersController {
 
     // Idempotent and never throws, so a restoration failure cannot leave the order stuck un-cancelled.
     await restoreOrderIncentives(String(order._id));
-    // Pay on Delivery: an order cancelled before dispatch returns the delivery fee the customer paid online.
-    if (order.commercePaymentMethod === "PAY_AT_HANDOVER") await new PaymentService().refundDeliveryFee(String(order._id));
 
     // Retire any open payment link so the customer cannot pay a dead order.
     await PaymentLink.updateMany(
@@ -289,7 +286,7 @@ export class AdminOrdersController {
     );
 
     await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
-    // A live task (e.g. a Pay-at-Handover order cancelled mid-sourcing) must
+    // A live task (e.g. an order cancelled mid-sourcing) must
     // stop and its Market Associate must be told, or they keep working an order that no longer exists.
     const activeTasks = await FulfilmentTask.find({
       orderId: String(order._id),
@@ -352,16 +349,6 @@ export class AdminOrdersController {
       throw new HttpError(
         409,
         `Order cannot move from ${order.status} to ${next}`,
-      );
-    }
-    if (
-      next === OrderStatus.DELIVERED &&
-      order.paymentMode === "pay_on_delivery" &&
-      order.paymentStatus !== PaymentStatus.SUCCESSFUL
-    ) {
-      throw new HttpError(
-        409,
-        "Pay on Delivery must be collected before completing delivery",
       );
     }
     order.status = next;

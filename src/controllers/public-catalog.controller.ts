@@ -336,10 +336,10 @@ export class PublicCatalogController {
   };
 
   categories = async (req: Request, res: Response) => {
-    // The customer app asks for withProducts=true so empty categories never appear.
-    // Market Associate and Partner forms need the full tree to file new products.
+    // withProducts=true adds a productCount to every category. Categories are always listed, even
+    // with no products yet, so the app never hides a category the team has set up.
     const withProducts = req.query.withProducts === "true";
-    const cacheKey = withProducts ? "categories:active:stocked" : "categories:active";
+    const cacheKey = withProducts ? "categories:active:counted" : "categories:active";
     const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
     if (lookup.hit) {
       sendSuccess(res, lookup.value);
@@ -355,7 +355,7 @@ export class PublicCatalogController {
     ]);
     const countOf = new Map<string, number>(counts.map((item: any) => [String(item._id), Number(item.count)]));
     const stocked = (node: any) => (countOf.get(node.internalId) || 0) + (node.children || []).reduce((sum: number, child: any) => sum + (countOf.get(child.internalId) || 0), 0);
-    const visibleTree = withProducts ? tree.filter((root: any) => stocked(root) > 0).map((root: any) => ({ ...root, children: (root.children || []).filter((child: any) => (countOf.get(child.internalId) || 0) > 0) })) : tree;
+    const visibleTree = tree;
     const present = (node: any) => ({
       publicId: node.publicId,
       name: node.name,

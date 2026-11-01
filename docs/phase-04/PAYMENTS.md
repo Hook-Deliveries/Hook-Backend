@@ -1,4 +1,4 @@
-# Payments And Pay At Handover
+# Payments
 
 `PaymentProvider` isolates provider behavior. Paystack Hosted Checkout is the only active prepayment provider. Initialization accepts an owned Order public ID; amount, currency, customer, reference, and metadata come from the Order.
 
@@ -16,5 +16,3 @@ The callback is a browser-return bridge only. It validates the reference format,
 The webhook is the payment-evidence boundary. Hook validates Paystack's HMAC signature against the untouched raw request body, deduplicates events, re-queries the provider, and verifies the reference, amount, currency, and provider status before confirming payment or advancing an Order.
 
 The deployed backend must configure `PAYSTACK_SECRET_KEY`, `PAYSTACK_CALLBACK_URL`, and `PAYSTACK_APP_RETURN_URL`. Localhost cannot receive Paystack webhooks; test deliveries require the deployed HTTPS API or a trusted HTTPS tunnel.
-
-POD uses global, State, Zone, and customer eligibility. Approval requires a recorded confirmed call and, above the configured threshold, a one-time Super Admin override. Decline explicitly requires prepayment or cancels the Order. POD collection itself is a Phase 5 responsibility.

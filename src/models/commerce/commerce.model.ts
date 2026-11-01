@@ -39,7 +39,7 @@ export interface CheckoutPreview extends BaseEntity {
   cartVersion: number;
   channel: "SHOPPER_APP" | "PARTNER_ASSISTED";
   deliveryMethod: "HOME_DELIVERY" | "PARTNER_PICKUP";
-  paymentMethod: "PREPAID" | "PAY_AT_HANDOVER";
+  paymentMethod: "PREPAID";
   addressId?: string;
   addressSnapshot?: Record<string, unknown>;
   pickupPartnerSnapshot?: Record<string, unknown>;
@@ -60,10 +60,6 @@ export interface CheckoutPreview extends BaseEntity {
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
-  podDecision: Record<string, unknown>;
-  /** Pay on Delivery: extra charge and the amount paid online now (delivery fee plus surcharge). */
-  podSurchargeMinor?: number;
-  podFeeDueNowMinor?: number;
   expiresAt: Date;
   consumedAt?: Date;
   orderId?: string;
@@ -73,8 +69,6 @@ export interface CommerceSettings extends BaseEntity {
   key: "commerce";
   currency: string;
   defaultDeliveryFeeMinor: number;
-  podEnabled: boolean;
-  defaultPodLimitMinor: number;
   previewTtlMinutes: number;
   catalogAvailabilityCheckDays: number;
   /** Ceiling on how much of one order's subtotal Hook credit may cover. */
@@ -103,14 +97,7 @@ export interface CommerceSettings extends BaseEntity {
   lowStockThreshold: number;
   /** Smallest cart subtotal (kobo) that may be checked out. Smaller carts can be saved but not bought. */
   minimumCheckoutMinor: number;
-  /** Pay on Delivery is only offered on orders at or above this subtotal (kobo). */
-  podMinimumOrderMinor: number;
-  podSurchargeType: "flat" | "percent";
   /** Kobo when flat, percent of the subtotal when percent. */
-  podSurchargeValue: number;
-  podAutoApproveEnabled: boolean;
-  /** Refused Pay on Delivery parcels before the customer loses the option. */
-  podRefusalSuspendCount: number;
   /** VAT charged on products, as a percent. */
   vatRatePercent: number;
   activePolicyVersions: Record<string, string>;
@@ -157,22 +144,6 @@ export interface IntegrationException extends BaseEntity {
   status: "open" | "resolved" | "ignored";
   resolvedBy?: string;
   resolvedAt?: Date;
-}
-
-export interface PodCallRecord extends BaseEntity {
-  orderId: string;
-  outcome: "CONFIRMED" | "NO_ANSWER" | "DECLINED" | "INVALID_CONTACT";
-  notes?: string;
-  actorId: string;
-  calledAt: Date;
-}
-
-export interface PodOverride extends BaseEntity {
-  orderId: string;
-  reason: string;
-  actorId: string;
-  approvedAt: Date;
-  amountMinor: number;
 }
 
 const addressSchema = createSchema<CustomerAddress>({
@@ -231,7 +202,7 @@ const previewSchema = createSchema<CheckoutPreview>({
   },
   paymentMethod: {
     type: String,
-    enum: ["PREPAID", "PAY_AT_HANDOVER"],
+    enum: ["PREPAID"],
     required: true,
   },
   addressId: { type: String },
@@ -254,9 +225,6 @@ const previewSchema = createSchema<CheckoutPreview>({
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
-  podDecision: { type: Object, default: {} },
-  podSurchargeMinor: { type: Number, default: 0, min: 0 },
-  podFeeDueNowMinor: { type: Number, default: 0, min: 0 },
   expiresAt: { type: Date, required: true },
   consumedAt: { type: Date },
   orderId: { type: String, index: true },
@@ -268,8 +236,6 @@ const settingsSchema = createSchema<CommerceSettings>({
   key: { type: String, enum: ["commerce"], unique: true, default: "commerce" },
   currency: { type: String, default: "NGN" },
   defaultDeliveryFeeMinor: { type: Number, default: 300000, min: 0 },
-  podEnabled: { type: Boolean, default: false },
-  defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
   catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
   creditSpendCapPercent: { type: Number, default: 20, min: 0, max: 100 },
@@ -293,11 +259,6 @@ const settingsSchema = createSchema<CommerceSettings>({
   },
   lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
   minimumCheckoutMinor: { type: Number, default: 1800000, min: 0 },
-  podMinimumOrderMinor: { type: Number, default: 3000000, min: 0 },
-  podSurchargeType: { type: String, enum: ["flat", "percent"], default: "flat" },
-  podSurchargeValue: { type: Number, default: 0, min: 0 },
-  podAutoApproveEnabled: { type: Boolean, default: true },
-  podRefusalSuspendCount: { type: Number, default: 2, min: 1, max: 20 },
   vatRatePercent: { type: Number, default: 7.5, min: 0, max: 30 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
@@ -375,27 +336,6 @@ exceptionSchema.index(
   { provider: 1, reference: 1, type: 1 },
   { unique: true, partialFilterExpression: { status: "open", reference: { $type: "string" } } },
 );
-const podCallSchema = createSchema<PodCallRecord>({
-  orderId: { type: String, required: true, index: true },
-  outcome: {
-    type: String,
-    enum: ["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"],
-    required: true,
-  },
-  notes: { type: String, maxlength: 1000 },
-  actorId: { type: String, required: true },
-  calledAt: { type: Date, default: Date.now },
-  deletedAt: { type: Date },
-});
-const podOverrideSchema = createSchema<PodOverride>({
-  orderId: { type: String, required: true, unique: true, index: true },
-  reason: { type: String, required: true, maxlength: 1000 },
-  actorId: { type: String, required: true },
-  approvedAt: { type: Date, default: Date.now },
-  amountMinor: { type: Number, required: true, min: 0 },
-  deletedAt: { type: Date },
-});
-
 export const CustomerAddress = createModel<CustomerAddress>(
   "CustomerAddress",
   addressSchema,
@@ -419,12 +359,4 @@ export const PaymentWebhookEvent = createModel<PaymentWebhookEvent>(
 export const IntegrationException = createModel<IntegrationException>(
   "IntegrationException",
   exceptionSchema,
-);
-export const PodCallRecord = createModel<PodCallRecord>(
-  "PodCallRecord",
-  podCallSchema,
-);
-export const PodOverride = createModel<PodOverride>(
-  "PodOverride",
-  podOverrideSchema,
 );
