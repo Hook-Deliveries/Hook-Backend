@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { categoryService } from '@modules/catalog/category.service';
 import { ProductStatus } from '@lib/constants';
 import { getPagination, paginated } from '@lib/api-utils';
 import { Category } from '@models/categories/category.model';
@@ -6,7 +7,12 @@ import { OperationState } from '@models/platform/geography.model';
 import { LegalContent } from '@models/platform/legal-content.model';
 import { Product } from '@models/products/product.model';
 import { sendSuccess } from '@utils/http';
+import { CommerceSettings } from '@models/commerce/commerce.model';
 import { publicProduct } from '@lib/public-resource';
+import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
+import { WaitlistService } from '@modules/notifications/waitlist.service';
+import { getEmailSettings } from '@modules/notifications/email-settings.service';
+import { Faq } from '@models/platform/faq.model';
 
 const routeParam = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value || '';
@@ -50,12 +56,26 @@ function searchExpression(value: string) {
 const LEGAL_DEFAULT_TITLES: Record<string, string> = {
   terms: 'Terms of Service',
   privacy: 'Privacy Policy',
+  returns: 'Returns Policy',
 };
 
 export class PublicController {
+  private readonly waitlist = new WaitlistService();
+
+  joinWaitlist = async (req: Request, res: Response) => {
+    const result = await this.waitlist.join(req.body);
+    sendSuccess(res, result);
+  };
+
+  /** Clicked directly from an email, so this renders a plain confirmation page rather than JSON. */
+  unsubscribeWaitlist = async (req: Request, res: Response) => {
+    const { unsubscribed } = await this.waitlist.unsubscribe(routeParam(req.params.token));
+    res.status(200).type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Unsubscribed</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#FAFAF8;color:#17140f;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}main{max-width:420px;text-align:center}h1{font-size:22px;margin:0 0 8px}p{color:#6b6355;line-height:1.6}</style></head><body><main><h1>${unsubscribed ? "You're unsubscribed" : 'Link not recognized'}</h1><p>${unsubscribed ? "You won't receive any more emails from Hook's waitlist. If you already have a Hook account, this doesn't affect it." : 'This unsubscribe link is invalid or has already been used.'}</p></main></body></html>`);
+  };
+
   getLegalContent = async (req: Request, res: Response) => {
     const type = routeParam(req.params.type);
-    if (type !== 'terms' && type !== 'privacy') {
+    if (type !== 'terms' && type !== 'privacy' && type !== 'returns') {
       res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Unknown legal document type' } });
       return;
     }
@@ -63,7 +83,7 @@ export class PublicController {
     sendSuccess(res, {
       type,
       title: doc?.title || LEGAL_DEFAULT_TITLES[type],
-      bodyHtml: doc?.bodyHtml || '',
+      bodyHtml: doc?.bodyHtml || (type === 'returns' ? DEFAULT_RETURNS_POLICY_HTML : ''),
       version: doc?.version || 0,
       effectiveDate: doc?.effectiveDate || null,
     });
@@ -72,7 +92,7 @@ export class PublicController {
   getProducts = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const where: Record<string, any> = { status: ProductStatus.APPROVED };
-    if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
+    if (typeof req.query.categoryId === 'string') where.categoryId = { $in: await categoryService.descendantIds(req.query.categoryId) };
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const minPrice = typeof req.query.minPrice === 'string' ? Number(req.query.minPrice) : undefined;
     const maxPrice = typeof req.query.maxPrice === 'string' ? Number(req.query.maxPrice) : undefined;
@@ -143,13 +163,43 @@ export class PublicController {
     sendSuccess(res, { featuredProducts: products.map(safeProduct), categories: categories.map((category: any) => safeProduct(category)) });
   };
 
+  /** What customers earn and are given in Hook credit, as the admin has set it. */
+  // Single source of truth for "Help & Support" across every client, signed in or not.
+  support = async (_req: Request, res: Response) => {
+    const settings = await getEmailSettings();
+    sendSuccess(res, { supportEmail: settings.supportEmail, supportUrl: settings.supportUrl, helpCenterUrl: settings.helpCenterUrl });
+  };
+
+  // Admin-managed questions shown on the /help page and in the app.
+  faqs = async (_req: Request, res: Response) => {
+    const data = await Faq.find({ isActive: true }).sort({ order: 1, createdAt: 1 }).select('publicId question answer').lean();
+    sendSuccess(res, data.map((faq) => ({ id: faq.publicId, question: faq.question, answer: faq.answer })));
+  };
+
+  creditConfig = async (_req: Request, res: Response) => {
+    const settings = await CommerceSettings.findOne({ key: 'commerce' })
+      .select('orderEarnEnabled orderEarnPercent orderEarnMaxMinor creditSpendCapPercent welcomeBonusMinor referralSignupBonusMinor referralReferrerBonusMinor minimumCheckoutMinor')
+      .lean();
+    sendSuccess(res, {
+      orderEarnEnabled: settings?.orderEarnEnabled ?? true,
+      orderEarnPercent: settings?.orderEarnPercent ?? 1,
+      orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
+      creditSpendCapPercent: settings?.creditSpendCapPercent ?? 20,
+      welcomeBonusMinor: settings?.welcomeBonusMinor ?? 30000,
+      referralSignupBonusMinor: settings?.referralSignupBonusMinor ?? 30000,
+      referralReferrerBonusMinor: settings?.referralReferrerBonusMinor ?? 100000,
+      // Guests need the minimum too: it is a cart rule, not an account one.
+      minimumCheckoutMinor: settings?.minimumCheckoutMinor ?? 1800000,
+    });
+  };
+
   getOperatingStates = async (_req: Request, res: Response) => {
     const states = await OperationState.find({
       countryCode: 'NG',
       status: 'active',
       operationsEnabled: true,
     })
-      .select('publicId code name capitalName operationsEnabled')
+      .select('publicId code name capitalName operationsEnabled deliveryEnabled deliveryFeeMinor deliveryPromiseHours')
       .sort({ name: 1 })
       .lean({ virtuals: true });
     sendSuccess(res, (states as any[]).map((state) => ({
@@ -158,6 +208,9 @@ export class PublicController {
       name: state.name,
       capitalName: state.capitalName,
       operationsEnabled: true,
+      deliveryEnabled: state.deliveryEnabled !== false,
+      deliveryFeeMinor: state.deliveryFeeMinor,
+      deliveryPromiseHours: state.deliveryPromiseHours,
     })));
   };
 

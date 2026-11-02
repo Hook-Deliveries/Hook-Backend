@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { routeParam } from '@lib/api-utils';
-import { resolveAccessContext, assertScope } from '@services/access-control.service';
-import { recordAudit } from '@services/platform-audit.service';
-import { MarketVendorService } from '@services/market-vendor.service';
+import { resolveAccessContext, assertScope } from '@modules/identity/access-control.service';
+import { ScopeType } from '@lib/constants';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { MarketVendorService } from '@modules/catalog/market-vendor.service';
 import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 
 const service = new MarketVendorService();
@@ -53,6 +54,55 @@ export class MarketAssociateMarketVendorController {
 }
 
 export class AdminMarketVendorController {
+  /**
+   * The global vendor directory. State-scoped staff only ever see vendors in
+   * the States they are assigned to; global staff see everything.
+   */
+  directory = async (req: Request, res: Response) => {
+    const context = await adminContext(req);
+    sendSuccess(res, await service.adminVendorDirectory({
+      page: Number(req.query.page) || 1,
+      limit: Number(req.query.limit) || 20,
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      marketId: typeof req.query.marketId === 'string' ? req.query.marketId : undefined,
+      status: typeof req.query.status === 'string' ? req.query.status : undefined,
+      stateIds: context.scopeType === ScopeType.GLOBAL ? undefined : context.stateIds,
+    }));
+  };
+
+  create = async (req: Request, res: Response) => {
+    const context = await adminContext(req);
+    const market = await service.adminMarket(routeParam(req.params.id));
+    assertScope(context, market.market.stateId, market.market.hubId);
+    const result = await service.adminCreateVendor(req.user!.sub, routeParam(req.params.id), req.body);
+    await recordAudit(req, {
+      action: 'market.vendor.created',
+      entityType: 'market_vendor',
+      entityId: result.vendor.id,
+      entityPublicId: result.vendor.publicId,
+      stateId: result.vendor.stateId,
+      after: result.vendor,
+      reason: req.body.reason,
+    });
+    sendCreated(res, result);
+  };
+
+  invite = async (req: Request, res: Response) => {
+    const context = await adminContext(req);
+    const before = await service.adminVendor(routeParam(req.params.id));
+    assertScope(context, before.vendor.stateId);
+    const result = await service.adminInviteVendor(req.user!.sub, routeParam(req.params.id));
+    await recordAudit(req, {
+      action: 'market.vendor.invited',
+      entityType: 'market_vendor',
+      entityId: before.vendor.id,
+      entityPublicId: before.vendor.publicId,
+      stateId: before.vendor.stateId,
+      after: { invitation: result.publicId },
+    });
+    sendSuccess(res, result);
+  };
+
   market = async (req: Request, res: Response) => {
     const context = await adminContext(req);
     const response = await service.adminMarket(routeParam(req.params.id));

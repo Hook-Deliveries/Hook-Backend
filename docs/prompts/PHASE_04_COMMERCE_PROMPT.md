@@ -12,8 +12,7 @@ Implement the customer commerce layer without weakening Phase 2 identity/RBAC or
 - One checkout per State with home delivery for app orders.
 - Address creation, validation, ownership, selection, and State compatibility.
 - Hook Partner assisted ordering and initiating-Partner pickup attribution.
-- Paystack prepayment and Pay-at-Handover with server-verified payment events.
-- Configurable NGN 100,000 Pay-at-Handover limit and audited Super Admin override.
+- Paystack prepayment with server-verified payment events.
 - Server-derived order lines, discounts, delivery rules, totals, currency, idempotency, and inventory validation.
 - Order creation and immutable pricing/quote snapshots.
 

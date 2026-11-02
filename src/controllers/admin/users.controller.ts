@@ -7,7 +7,8 @@ import { adminRepos, getPagination, paginated, routeParam } from './admin.helper
 import { User } from '@models/users/user.model';
 import { Order } from '@models/orders/order.model';
 import { CustomerAddress } from '@models/commerce/commerce.model';
-import { revokeAccountSessions } from '@services/account-session.service';
+import { revokeAccountSessions } from '@modules/identity/account-session.service';
+import { CreditService } from '@modules/orders/credit.service';
 
 const USER_LIST_FIELDS = 'publicId email phone firstName lastName role accountType accountStatus scopeType assignedStateIds assignedHubIds assignedCategoryIds isEmailVerified isPhoneVerified isActive lastLoginAt createdAt updatedAt';
 
@@ -23,6 +24,8 @@ function safeUser(user: any) {
 }
 
 export class AdminUsersController {
+  private readonly credits = new CreditService();
+
   list = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const role = typeof req.query.role === 'string' ? req.query.role : undefined;
@@ -79,7 +82,7 @@ export class AdminUsersController {
     const user = await adminRepos.users().findOne({ where: { id: routeParam(req.params.id) } });
     if (!user) throw new HttpError(404, 'User not found');
     const customerId = user.id;
-    const [defaultAddress, spendAgg, recentOrders] = await Promise.all([
+    const [defaultAddress, spendAgg, recentOrders, creditBalanceMinor] = await Promise.all([
       CustomerAddress.findOne({ customerId, status: 'active' }).sort({ isDefault: -1, createdAt: -1 }).lean(),
       Order.aggregate([
         { $match: { userId: customerId, paymentStatus: PaymentStatus.SUCCESSFUL } },
@@ -90,6 +93,7 @@ export class AdminUsersController {
         .sort({ createdAt: -1 })
         .limit(10)
         .lean({ virtuals: true }),
+      this.credits.balance(customerId),
     ]);
     sendSuccess(res, {
       ...safeUser(user),
@@ -97,7 +101,25 @@ export class AdminUsersController {
       totalSpentMinor: spendAgg[0]?.totalSpentMinor || 0,
       orderCount: spendAgg[0]?.orderCount || 0,
       recentOrders,
+      creditBalanceMinor,
     });
+  };
+
+  /** A manual, one-off credit gift with a reason — separate from any order or the waitlist campaign. */
+  giftCredit = async (req: Request, res: Response) => {
+    const users = adminRepos.users();
+    const user = await users.findOne({ where: { id: routeParam(req.params.id) } });
+    if (!user) throw new HttpError(404, 'User not found');
+    await this.credits.grantAdminCredit({
+      userId: user.id,
+      amountMinor: req.body.amountMinor,
+      reason: req.body.reason,
+      actorId: req.user!.sub,
+      idempotencyKey: req.body.idempotencyKey,
+    });
+    await auditAdminAction(req, 'customer.gift_credit', 'user', user.id, { amountMinor: req.body.amountMinor, reason: req.body.reason });
+    const creditBalanceMinor = await this.credits.balance(user.id);
+    sendSuccess(res, { id: user.id, creditBalanceMinor });
   };
 
   create = async (req: Request, res: Response) => {

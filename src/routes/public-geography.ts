@@ -1,15 +1,17 @@
+import { publicBanners } from '@controllers/admin/banners.controller';
 import { Router } from 'express';
+import { categoryService } from '@modules/catalog/category.service';
 import { isValidObjectId } from 'mongoose';
 import { OperationCity, OperationLocalGovernment, OperationState } from '@models/platform/geography.model';
 import { Market } from '@models/platform/network.model';
 import { Category } from '@models/categories/category.model';
 import { Product } from '@models/products/product.model';
 import { ProductStatus } from '@lib/constants';
-import { presentMarketRecords } from '@services/platform-presentation.service';
+import { presentMarketRecords } from '@modules/platform/platform-presentation.service';
 import { asyncHandler, HttpError, sendSuccess } from '@utils/http';
 import { PublicCatalogController } from '@controllers/public-catalog.controller';
 import { PublicController } from '@controllers/public.controller';
-import { publicCatalogCache } from '@lib/ttl-cache';
+import { sharedCache } from '@modules/platform/cache.service';
 
 async function resolveId(model: any, identifier: unknown, extraField?: string) {
   const value = String(identifier || '').trim();
@@ -49,19 +51,21 @@ export function createPublicGeographyRouter() {
   router.get('/products', asyncHandler(catalog.products));
   router.get('/products/status', asyncHandler(catalog.statuses));
   router.get('/products/:id', asyncHandler(catalog.product));
+  router.get('/banners', asyncHandler(publicBanners));
   router.get('/categories', asyncHandler(catalog.categories));
+  router.get('/categories/tree', asyncHandler(catalog.categories));
   router.get('/search', asyncHandler(catalog.search));
   router.get('/search/suggestions', asyncHandler(catalog.suggestions));
   router.get('/operating-states', asyncHandler(publicController.getOperatingStates));
   const deliveryStates = asyncHandler(async (_req, res) => {
     const cacheKey = 'public:states';
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const states = await OperationState.find({ countryCode: 'NG', status: 'active', deliveryEnabled: { $ne: false } })
-      .select('publicId name capitalName code timezone currency deliveryPromiseHours payAtHubEnabled deliveryEnabled')
+      .select('publicId name capitalName code timezone currency deliveryPromiseHours deliveryEnabled')
       .sort({ name: 1 }).lean({ virtuals: true });
     const response = states.map((state: any) => ({
       publicId: state.publicId,
@@ -71,19 +75,18 @@ export function createPublicGeographyRouter() {
       timezone: state.timezone,
       currency: state.currency,
       deliveryPromiseHours: state.deliveryPromiseHours,
-      payAtHubEnabled: state.payAtHubEnabled,
       deliveryEnabled: state.deliveryEnabled !== false,
     }));
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   });
   router.get('/delivery-states', deliveryStates);
   router.get('/states', deliveryStates);
   const deliveryLgas = asyncHandler(async (req, res) => {
     const cacheKey = `public:lgas:${req.params.stateId}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const state = await OperationState.findOne({
@@ -101,7 +104,7 @@ export function createPublicGeographyRouter() {
       state: { publicId: state.publicId, name: state.name, capitalName: state.capitalName, code: state.code },
       data: rows.map((row: any) => ({ publicId: row.publicId, stateId: state.publicId, name: row.name })),
     };
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   });
   router.get('/delivery-states/:stateId/lgas', deliveryLgas);
@@ -113,9 +116,9 @@ export function createPublicGeographyRouter() {
   }));
   router.get('/markets', asyncHandler(async (req, res) => {
     const cacheKey = `public:markets:${String(req.query.stateCode || req.query.stateId || 'all')}:${String(req.query.cityId || 'all')}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const filter: Record<string, unknown> = { status: 'active' };
@@ -130,50 +133,60 @@ export function createPublicGeographyRouter() {
       .lean({ virtuals: true });
     const presented = await presentMarketRecords(markets);
     const response = presented.map(safeMarket);
-    publicCatalogCache.set(cacheKey, response);
+    await lookup.store(response);
     sendSuccess(res, response);
   }));
   router.get('/markets/:id/categories', asyncHandler(async (req, res) => {
-    const cacheKey = `public:market-categories:${req.params.id}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const cacheKey = `public:market-categories:v2:${req.params.id}`;
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const marketId = await resolveId(Market, req.params.id);
-    const categoryIds = await Product.distinct('categoryId', {
-      marketId,
-      status: ProductStatus.PUBLISHED,
-      publishedAt: { $lte: new Date() },
-      deletedAt: { $exists: false },
-    });
-    const [categories, counts] = await Promise.all([
-      Category.find({ _id: { $in: categoryIds }, isActive: true, deletedAt: { $exists: false } })
-        .select('publicId name slug iconUrl description sortOrder')
-        .sort({ sortOrder: 1, name: 1 })
-        .lean({ virtuals: true }),
+    // One aggregate gives both which categories exist here and how many products each holds; the tree loads alongside it.
+    const [counts, tree] = await Promise.all([
       Product.aggregate([
         { $match: { marketId, status: ProductStatus.PUBLISHED, publishedAt: { $lte: new Date() }, deletedAt: { $exists: false } } },
         { $group: { _id: '$categoryId', count: { $sum: 1 } } },
       ]),
+      categoryService.tree(),
     ]);
     const countMap = new Map(counts.map((item: any) => [String(item._id), item.count]));
-    const response = categories.map((category: any) => ({
-      publicId: category.publicId,
-      name: category.name,
-      slug: category.slug,
-      iconUrl: category.iconUrl || null,
-      description: category.description || '',
-      productCount: countMap.get(String(category._id)) || 0,
-    }));
-    publicCatalogCache.set(cacheKey, response);
+    // Products sit in sub-categories. Every category is listed, stocked ones first, each with its
+    // rolled-up count (0 when this market has none yet) and its sub-categories.
+    const response = tree
+      .map((root: any) => {
+        const children = (root.children || [])
+          .map((child: any) => ({ ...child, productCount: countMap.get(child.internalId) || 0 }))
+          .sort((left: any, right: any) => Number(right.productCount > 0) - Number(left.productCount > 0));
+        const own = countMap.get(root.internalId) || 0;
+        return { root, children, productCount: own + children.reduce((sum: number, child: any) => sum + child.productCount, 0) };
+      })
+      .sort((left: any, right: any) => Number(right.productCount > 0) - Number(left.productCount > 0))
+      .map(({ root, children, productCount }: any) => ({
+        publicId: root.publicId,
+        name: root.name,
+        slug: root.slug,
+        iconUrl: root.iconUrl || null,
+        description: root.description || '',
+        productCount,
+        children: children.map((child: any) => ({
+          publicId: child.publicId,
+          name: child.name,
+          slug: child.slug,
+          iconUrl: child.iconUrl || null,
+          productCount: child.productCount,
+        })),
+      }));
+    await lookup.store(response);
     sendSuccess(res, response);
   }));
   router.get('/markets/:id', asyncHandler(async (req, res) => {
     const cacheKey = `public:market:${req.params.id}`;
-    const cached = publicCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
+    const lookup = await sharedCache.lookup<any>("catalog", cacheKey);
+    if (lookup.hit) {
+      sendSuccess(res, lookup.value);
       return;
     }
     const marketId = await resolveId(Market, req.params.id);
@@ -182,7 +195,7 @@ export function createPublicGeographyRouter() {
       .lean({ virtuals: true });
     if (!market) throw new HttpError(404, 'Market not found', undefined, 'NOT_FOUND');
     const response = safeMarket(await presentMarketRecords(market));
-    publicCatalogCache.set(cacheKey, response, 30_000);
+    await lookup.store(response, 30_000);
     sendSuccess(res, response);
   }));
   return router;

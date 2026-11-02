@@ -1,3 +1,6 @@
+import compression from 'compression';
+import { redisHealth } from '@config/redis';
+import { sharedCache } from '@modules/platform/cache.service';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
@@ -19,6 +22,7 @@ import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
 import { requestTiming } from '@middleware/request-timing';
+import { metricsHandler } from '@lib/metrics';
 
 export function createApp() {
   const app = express();
@@ -31,6 +35,8 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.use(requestContext);
   app.use(requestTiming);
+  // Smaller responses over slow mobile networks: catalogue payloads compress to a fraction of their size.
+  app.use(compression({ threshold: 1024 }));
   app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   }));
@@ -48,16 +54,9 @@ export function createApp() {
   // parsing or serialization differences.
   app.post(`${apiPrefix}/webhooks/paystack`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
     try {
-      const { PaymentService } = await import('@services/payment.service');
+      const { PaymentService } = await import('@modules/payments/payment.service');
       const signature = String(req.header('x-paystack-signature') || '');
       sendSuccess(res, await new PaymentService().webhook('paystack', req.body as Buffer, signature, req.requestId));
-    } catch (error) { next(error); }
-  });
-  app.post(`${apiPrefix}/webhooks/opay`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
-    try {
-      const { PaymentService } = await import('@services/payment.service');
-      const signature = String(req.header('signature') || req.header('x-opay-signature') || '');
-      sendSuccess(res, await new PaymentService().webhook('opay', req.body as Buffer, signature, req.requestId));
     } catch (error) { next(error); }
   });
   app.get(`${apiPrefix}/payments/paystack/callback`, (req, res) => {
@@ -81,15 +80,48 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.redirect(302, returnUrl.toString());
   });
+  // Monnify signs clientSecret + the exact request bytes, so this route must also run
+  // before the global JSON parser, same reasoning as the Paystack route above.
+  app.post(`${apiPrefix}/webhooks/monnify`, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res, next) => {
+    try {
+      const { PaymentService } = await import('@modules/payments/payment.service');
+      const signature = String(req.header('monnify-signature') || '');
+      sendSuccess(res, await new PaymentService().webhook('monnify', req.body as Buffer, signature, req.requestId));
+    } catch (error) { next(error); }
+  });
+  app.get(`${apiPrefix}/payments/monnify/callback`, (req, res) => {
+    const reference = String(req.query.paymentReference || '');
+    if (!/^[A-Za-z0-9._=-]{1,120}$/.test(reference)) {
+      return sendError(
+        res,
+        400,
+        'VALIDATION_ERROR',
+        'A valid payment reference is required',
+      );
+    }
+    const configuredReturnUrl = String(process.env.PAYSTACK_APP_RETURN_URL || '');
+    const returnUrl = new URL(
+      configuredReturnUrl.startsWith('hook://')
+        ? configuredReturnUrl
+        : 'hook://payments/return',
+    );
+    returnUrl.searchParams.set('reference', reference);
+    returnUrl.searchParams.set('source', 'monnify');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.redirect(302, returnUrl.toString());
+  });
   app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: process.env.FORM_BODY_LIMIT || '1mb' }));
   app.use(sanitizeRequest);
   app.use(generalLimiter);
-  app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+  if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
   app.use('/uploads', express.static(join(process.cwd(), 'uploads')));
 
-  app.get('/health', (_req, res) => {
-    sendSuccess(res, { status: 'ok', uptime: process.uptime() });
+  app.get('/metrics', metricsHandler);
+
+  app.get('/health', async (_req, res) => {
+    // Redis is optional: report it, but a Redis outage is not an API outage.
+    sendSuccess(res, { status: 'ok', uptime: process.uptime(), redis: await redisHealth(), cache: sharedCache.stats() });
   });
 
   app.get('/docs-json', (_req, res) => {
@@ -145,6 +177,14 @@ export function createApp() {
   app.use(`${apiPrefix}/market-associate`, createMarketAssociateRouter());
   app.use(`${apiPrefix}/partner`, createPartnerRouter());
   app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
+  // Public reads are revalidated on every request (cheap 304s via ETag), so an admin change reaches the app the moment
+  // the realtime refresh fires instead of waiting out a stale copy.
+  app.use(`${apiPrefix}/public`, (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'GET' && /^\/(categories|markets|banners|operating-states)(\/|$|\?)/.test(req.url)) {
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+    }
+    next();
+  });
   app.use(`${apiPrefix}/public`, createPublicGeographyRouter());
   app.use(`${apiPrefix}/upload`, uploadLimiter, createUploadRouter());
   app.use(`${apiPrefix}/webhooks`, createWebhookRouter());

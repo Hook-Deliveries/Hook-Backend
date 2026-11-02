@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
-import { NegotiationService } from '@services/negotiation.service';
+import { NegotiationService } from '@modules/negotiation/negotiation.service';
 import { routeParam } from '@lib/api-utils';
-import { sendCreated, sendSuccess } from '@utils/http';
-import { recordAudit } from '@services/platform-audit.service';
+import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { NegotiationShoppingService } from '@modules/negotiation/negotiation-shopping.service';
+import { NegotiationCommandService } from '@modules/negotiation/negotiation-command.service';
 
 function identity(req: Request) {
   return { customerId: req.user!.sub };
@@ -10,6 +12,31 @@ function identity(req: Request) {
 
 export class NegotiationController {
   private readonly negotiations = new NegotiationService();
+  private readonly shopping = new NegotiationShoppingService();
+
+  message = async (req: Request, res: Response) => {
+    const result = await new NegotiationCommandService().run(identity(req), routeParam(req.params.id), req.header('idempotency-key') || '', { message: req.body.message });
+    const audit = result as Record<string, unknown>;
+    const entry = audit.entry as { kind?: string; actionId?: string; productIds?: string[] } | undefined;
+    await recordAudit(req, {
+      action: audit.providerFallback ? 'negotiation.azure_fallback' : entry?.kind === 'suggestions' ? 'negotiation.suggestions_created' : entry?.kind === 'action' ? 'negotiation.confirmation_requested' : 'negotiation.message_processed',
+      entityType: 'negotiation', entityPublicId: routeParam(req.params.id),
+      after: { contentKind: entry?.kind, actionId: entry?.actionId, productIds: entry?.productIds, providerFallback: audit.providerFallback },
+    });
+    sendSuccess(res, result);
+  };
+
+  confirmAction = async (req: Request, res: Response) => {
+    let result;
+    try {
+      result = await this.shopping.confirm(identity(req), routeParam(req.params.id), routeParam(req.params.actionId), req.body.quantity, req.body.variantId);
+    } catch (error) {
+      if (error instanceof HttpError) await recordAudit(req, { action: 'negotiation.confirmation_rejected', entityType: 'negotiation', entityPublicId: routeParam(req.params.id), after: { actionId: routeParam(req.params.actionId), code: error.code } });
+      throw error;
+    }
+    await recordAudit(req, { action: 'negotiation.cart_confirmed', entityType: 'negotiation', entityPublicId: routeParam(req.params.id) });
+    sendSuccess(res, result);
+  };
 
   create = async (req: Request, res: Response) => {
     const created = await this.negotiations.start(identity(req), req.body);
@@ -23,13 +50,7 @@ export class NegotiationController {
   };
 
   offer = async (req: Request, res: Response) => {
-    const result = await this.negotiations.offer(
-      identity(req),
-      routeParam(req.params.id),
-      req.body.offeredPriceMinor,
-      req.header('idempotency-key') || '',
-      req.body.message,
-    );
+    const result = await new NegotiationCommandService().run(identity(req), routeParam(req.params.id), req.header('idempotency-key') || '', { offeredPriceMinor: req.body.offeredPriceMinor, message: req.body.message });
     const auditResult = result as Record<string, unknown>;
     await recordAudit(req, {
       action: auditResult.providerFallback ? 'negotiation.azure_fallback' : 'negotiation.offer_processed',

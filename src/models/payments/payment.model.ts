@@ -5,11 +5,13 @@ export interface Payment extends BaseEntity {
   publicId?: string;
   orderId?: string;
   fulfilmentGroupId?: string;
+  /** Set when this Payment is a replacement-item top-up rather than a normal order/delivery payment — see PaymentLinkService.createForSubstitution. */
+  itemResolutionId?: string;
   giftId?: string;
   resourceType: "order" | "gift";
   transactionRef: string;
   gatewayRef?: string;
-  gateway: "opay" | "paystack" | "nomba";
+  gateway: "paystack" | "nomba" | "monnify";
   paymentMethod: "card" | "bank_transfer" | "ussd" | "pos";
   amount: number;
   gatewayFee: number;
@@ -33,7 +35,6 @@ export interface Payment extends BaseEntity {
     | "PROCESSING"
     | "CONFIRMED"
     | "FAILED"
-    | "DUE_AT_HANDOVER"
     | "REFUND_PENDING"
     | "REFUNDED";
   providerEventId?: string;
@@ -48,6 +49,7 @@ const PaymentSchema = createSchema<Payment>({
   publicId: { type: String, unique: true, sparse: true, index: true },
   orderId: { type: String, sparse: true, index: true },
   fulfilmentGroupId: { type: String, unique: true, sparse: true, index: true },
+  itemResolutionId: { type: String, unique: true, sparse: true, index: true },
   giftId: { type: String, unique: true, sparse: true, index: true },
   resourceType: {
     type: String,
@@ -59,7 +61,7 @@ const PaymentSchema = createSchema<Payment>({
   gatewayRef: { type: String, index: true },
   gateway: {
     type: String,
-    enum: ["opay", "paystack", "nomba"],
+    enum: ["paystack", "nomba", "monnify"],
     required: true,
   },
   paymentMethod: {
@@ -90,7 +92,6 @@ const PaymentSchema = createSchema<Payment>({
       "PROCESSING",
       "CONFIRMED",
       "FAILED",
-      "DUE_AT_HANDOVER",
       "REFUND_PENDING",
       "REFUNDED",
     ],
@@ -104,5 +105,8 @@ const PaymentSchema = createSchema<Payment>({
   legacyProvider: { type: String },
   deletedAt: { type: Date },
 });
+
+// reconcileStalePayments runs every minute over payments by status and age.
+PaymentSchema.index({ commerceStatus: 1, updatedAt: 1 });
 
 export const Payment = createModel<Payment>("Payment", PaymentSchema);

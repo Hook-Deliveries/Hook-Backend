@@ -25,7 +25,7 @@ export interface OrderItem extends BaseEntity {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
-  selectedVariants?: { color?: string; size?: string };
+  selectedVariants?: Record<string, string | undefined>;
   commissionAmount: number;
   product?: any;
   vendor?: any;

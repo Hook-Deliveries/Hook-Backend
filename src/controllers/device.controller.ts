@@ -3,11 +3,14 @@ import { isValidObjectId } from 'mongoose';
 import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
-import { NotificationService } from '@services/notification.service';
+import { NotificationService } from '@modules/notifications/notification.service';
 import { AccountSession } from '@models/platform/session.model';
-import { realtime } from '@services/realtime.service';
+import { User } from '@models/users/user.model';
+import { realtime } from '@modules/platform/realtime.service';
 import { HttpError } from '@utils/http';
 import { sendSuccess } from '@utils/http';
+
+const WELCOME_BACK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function owner(req: Request) {
   return { userId: req.user!.sub };
@@ -29,14 +32,24 @@ export class DeviceController {
         platform: req.body.platform,
       } });
     }
-    if (req.body.sendWelcome && device && !(device as DeviceToken).welcomeSentAt) {
-      await this.notifications.sendPushToDevice(
-        req.body.expoPushToken,
-        'Welcome to Hook',
-        'Your marketplace is ready.',
-        { type: 'welcome' },
-      );
-      await DeviceToken.updateOne({ _id: (device as DeviceToken).id }, { $set: { welcomeSentAt: new Date() } });
+    // Sign-in greeting: "Welcome to Hook" the first time this device signs in,
+    // "Welcome back" on later sign-ins. Spaced out so switching accounts or
+    // signing in repeatedly never turns into a stream of greetings.
+    if (req.body.sendWelcome && device) {
+      const lastSent = (device as DeviceToken).welcomeSentAt;
+      const first = !lastSent;
+      const due = first || Date.now() - new Date(lastSent as Date).getTime() > WELCOME_BACK_INTERVAL_MS;
+      if (due) {
+        const user = first ? null : await User.findById(req.user!.sub).select('firstName').lean() as { firstName?: string } | null;
+        const name = user?.firstName?.trim();
+        await this.notifications.sendPushToDevice(
+          req.body.expoPushToken,
+          first ? 'Welcome to Hook' : name ? `Welcome back, ${name}` : 'Welcome back',
+          first ? 'Your marketplace is ready.' : 'Pick up where you left off.',
+          { type: first ? 'welcome' : 'welcome_back' },
+        );
+        await DeviceToken.updateOne({ _id: (device as DeviceToken).id }, { $set: { welcomeSentAt: new Date() } });
+      }
     }
     sendSuccess(res, device);
   };

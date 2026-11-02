@@ -1,7 +1,7 @@
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface LegalContent extends BaseEntity {
-  type: 'terms' | 'privacy';
+  type: 'terms' | 'privacy' | 'returns';
   title: string;
   bodyHtml: string;
   version: number;
@@ -10,7 +10,7 @@ export interface LegalContent extends BaseEntity {
 }
 
 const legalContentSchema = createSchema<LegalContent>({
-  type: { type: String, enum: ['terms', 'privacy'], unique: true, required: true },
+  type: { type: String, enum: ['terms', 'privacy', 'returns'], unique: true, required: true },
   title: { type: String, required: true, trim: true },
   bodyHtml: { type: String, required: true },
   version: { type: Number, default: 1, min: 1 },

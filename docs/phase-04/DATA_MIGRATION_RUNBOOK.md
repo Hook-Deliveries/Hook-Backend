@@ -7,7 +7,7 @@ The active development workflow does not run incremental migrations. `npm run se
 3. Phase 3 commercial catalog, variants, submissions, and negotiation fixtures.
 4. Phase 4 canonical commerce fields, policies, settings, coverage, customer, and address fixtures.
 
-The command is intentionally destructive in every environment. Always verify `MONGODB_URI` and `MONGODB_DB_NAME` before running it.
+The command is intentionally destructive in every environment. Always verify the complete `MONGODB_URI`, including its database path, before running it.
 
 Incremental migration commands are not exposed through `package.json`. Seed is the supported MongoDB data-management workflow for the current pre-production platform.
 

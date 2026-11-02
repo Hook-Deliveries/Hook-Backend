@@ -7,11 +7,10 @@
 - Persisted versioned checkout previews and idempotent per-State confirmation.
 - Immutable Order/item/address/customer/policy/price/quote snapshots.
 - Paystack Hosted Checkout, raw signed webhook evidence, polling, deduplication, mismatch records, and provider-neutral boundary.
-- POD review, confirmation call, Super Admin override, prepayment conversion, cancellation, settings, and customer eligibility restoration.
 - Self-scoped Partner-assisted customer, basket, checkout, payment-instruction, and Order APIs.
 - Idempotent customer notifications and fulfilment-ready outbox events.
 - Shopper product, negotiation, addresses, State cart, checkout, payment, Order list, and Order detail routes.
-- Admin POD, Payments/Reconciliation, Commerce Settings, and immutable Order detail surfaces.
+- Admin Payments/Reconciliation, Commerce Settings, and immutable Order detail surfaces.
 - One-command full database reset and complete Phase 1-4 seed pipeline, including QA policy/settings/customer fixtures.
 
 ## Validation Record

@@ -19,17 +19,28 @@ export type ItemVerificationCheck = {
   sizeMatches: boolean;
   colorMatches: boolean;
   quantityMatches: boolean;
+  /** Every other detail the category asks for (capacity, length, phone model...). True when the item has none. */
+  attributesMatch?: boolean;
 };
 
 export type ItemVerification = {
   orderItemId: string;
-  photoUrl: string;
-  photoAssetId?: string;
+  photoUrl?: string;
+  photos: Array<{ view: 'front' | 'side' | 'back'; url: string; assetId?: string }>;
+  actualColor?: string;
+  actualSize?: string;
+  /** What was found for each non-size, non-colour detail the order asked for. */
+  actualAttributes?: Record<string, string>;
+  actualQuantity: number;
+  unitCostMinor: number;
+  supplierReference?: string;
+  conditionNote: string;
   checks: ItemVerificationCheck;
   matched: boolean;
   reportedIssue?: { summary: string; note?: string; exceptionId?: string };
   verifiedAt: Date;
   verifiedBy: string;
+  revisions?: Array<Record<string, unknown>>;
 };
 
 export interface FulfilmentTask extends BaseEntity {
@@ -51,11 +62,9 @@ export interface FulfilmentTask extends BaseEntity {
   packedAt?: Date;
   hubArrivedAt?: Date;
   hubReceivedAt?: Date;
+  /** Items sent back to the Market Associate after a failed Hub check. */
+  resourceItemIds?: string[];
   completedAt?: Date;
-  acceptanceDueAt: Date;
-  sourcingDueAt: Date;
-  hubHandoverDueAt: Date;
-  resolutionDueAt: Date;
   actualCostMinor?: number;
   evidence: FulfilmentEvidence[];
   itemVerifications: ItemVerification[];
@@ -72,6 +81,11 @@ export interface RunnerPackage extends BaseEntity {
   status: RunnerPackageStatus;
   scanCredentialHash: string;
   scanCredentialHint: string;
+  scanCredentialCiphertext?: string;
+  credentialGeneratedAt?: Date;
+  credentialVerifiedAt?: Date;
+  credentialFailedAttempts: number;
+  credentialLockedAt?: Date;
   itemIds: string[];
   labelReference?: string;
   packedAt?: Date;
@@ -111,6 +125,7 @@ export interface Consolidation extends BaseEntity {
   weightGrams?: number;
   dimensions?: { lengthCm: number; widthCm: number; heightCm: number };
   sealReference?: string;
+  receiptPrints?: Array<{ by: string; at: Date; size?: string }>;
   evidence: FulfilmentEvidence[];
   sealedAt?: Date;
   sealedBy?: string;
@@ -127,6 +142,17 @@ export interface Shipment extends BaseEntity {
   hubId: string;
   consolidationId: string;
   provider: LogisticsProviderKey;
+  /**
+   * The courier the customer actually chose and paid for at checkout, e.g.
+   * 'GIG' / 'GUO' / 'DHL'. Kept separate from `provider` because that is the
+   * runtime booking adapter (manual/simulated/gig/fez/other) and its enum
+   * physically cannot hold an arbitrary courier code.
+   */
+  courierCode?: string;
+  courierName?: string;
+  /** Set only when staff booked someone other than the customer's choice. */
+  substitutedFrom?: string;
+  substitutionReason?: string;
   serviceName?: string;
   externalReference?: string;
   status: ShipmentStatus;
@@ -141,7 +167,6 @@ export interface Shipment extends BaseEntity {
   trackingNumber?: string;
   trackingEvents: Array<Record<string, unknown>>;
   evidence: FulfilmentEvidence[];
-  releaseStatus?: 'NOT_REQUIRED' | 'AWAITING_HANDOVER_PAYMENT' | 'RELEASE_APPROVED';
   bookingIdempotencyKey?: string;
   version: number;
 }
@@ -158,25 +183,6 @@ export interface PickupManifest extends BaseEntity {
   handedOverBy?: string;
 }
 
-export interface FulfilmentException extends BaseEntity {
-  publicId: string;
-  orderId?: string;
-  taskId?: string;
-  hubId?: string;
-  shipmentId?: string;
-  sourceStateId?: string;
-  type: 'ASSIGNMENT_MISSING' | 'HUB_MISSING' | 'SLA_BREACH' | 'ITEM_UNAVAILABLE' | 'QC_FAILED' | 'DELIVERY_FAILED' | 'CUSTODY_OVERDUE' | 'INTEGRATION';
-  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'DISMISSED';
-  summary: string;
-  details?: Record<string, unknown>;
-  dueAt?: Date;
-  openedBy?: string;
-  resolvedBy?: string;
-  resolutionNote?: string;
-  idempotencyKey?: string;
-}
-
 export interface PartnerCustody extends BaseEntity {
   publicId: string;
   orderId: string;
@@ -186,6 +192,7 @@ export interface PartnerCustody extends BaseEntity {
   collectionCodeHash?: string;
   collectionCodeHint?: string;
   codeAttempts: number;
+  lastCodeAttemptAt?: Date;
   codeSentAt?: Date;
   receivedAt?: Date;
   releasedAt?: Date;
@@ -220,7 +227,7 @@ export interface FulfilmentRefund extends BaseEntity {
   amountMinor: number;
   currency: string;
   reason: string;
-  status: 'REQUESTED' | 'APPROVED' | 'PROVIDER_PENDING' | 'REFUNDED' | 'FAILED';
+  status: 'REQUESTED' | 'APPROVED' | 'PROVIDER_PENDING' | 'PROVIDER_UNKNOWN' | 'REFUNDED' | 'FAILED';
   providerReference?: string;
   idempotencyKey: string;
   approvedBy?: string;
@@ -238,6 +245,8 @@ export interface LogisticsWebhookEvent extends BaseEntity {
   status: 'RECEIVED' | 'PROCESSED' | 'IGNORED' | 'FAILED';
   receivedAt: Date;
   processedAt?: Date;
+  /** Lease held by the delivery currently handling this event. */
+  lockedUntil?: Date;
 }
 
 const evidence = { type: [Object], default: [] };
@@ -255,21 +264,23 @@ const taskSchema = createSchema<FulfilmentTask>({
   idempotencyKey: { type: String, required: true, unique: true, index: true },
   alertedAt: { type: Date }, acceptedAt: { type: Date }, sourcingStartedAt: { type: Date },
   productSecuredAt: { type: Date }, packingStartedAt: { type: Date }, packedAt: { type: Date },
-  hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, completedAt: { type: Date },
-  acceptanceDueAt: { type: Date, required: true, index: true },
-  sourcingDueAt: { type: Date, required: true }, hubHandoverDueAt: { type: Date, required: true }, resolutionDueAt: { type: Date, required: true },
+  hubArrivedAt: { type: Date }, hubReceivedAt: { type: Date }, resourceItemIds: { type: [String], default: undefined }, completedAt: { type: Date },
   actualCostMinor: { type: Number, min: 0 }, evidence, itemVerifications: { type: [Object], default: [] }, issue: { type: Object }, assignmentHistory: { type: [Object], default: [] },
 });
 taskSchema.index({ orderId: 1, marketId: 1 }, { unique: true });
-taskSchema.index({ marketAssociateId: 1, status: 1, acceptanceDueAt: 1 });
+taskSchema.index({ marketAssociateId: 1, status: 1, createdAt: 1 });
 
 const runnerPackageSchema = createSchema<RunnerPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true },
   taskId: { type: String, required: true, unique: true, index: true }, marketAssociateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true },
   status: { type: String, enum: Object.values(RunnerPackageStatus), default: RunnerPackageStatus.READY_FOR_HUB, index: true },
-  scanCredentialHash: { type: String, required: true, select: false }, scanCredentialHint: { type: String, required: true }, itemIds: { type: [String], default: [] },
+  scanCredentialHash: { type: String, required: true, select: false }, scanCredentialHint: { type: String, required: true }, scanCredentialCiphertext: { type: String, select: false }, credentialGeneratedAt: { type: Date }, credentialVerifiedAt: { type: Date }, credentialFailedAttempts: { type: Number, default: 0, min: 0 }, credentialLockedAt: { type: Date }, itemIds: { type: [String], default: [] },
   labelReference: { type: String }, packedAt: { type: Date }, handedOverAt: { type: Date }, evidence, version: { type: Number, default: 1, min: 1 },
 });
+runnerPackageSchema.index(
+  { hubId: 1, scanCredentialHash: 1 },
+  { unique: true, partialFilterExpression: { status: RunnerPackageStatus.READY_FOR_HUB } },
+);
 
 const hubPackageSchema = createSchema<HubPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, taskId: { type: String, required: true, index: true }, runnerPackageId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, marketAssociateId: { type: String, required: true, index: true },
@@ -277,25 +288,30 @@ const hubPackageSchema = createSchema<HubPackage>({
 });
 
 const consolidationSchema = createSchema<Consolidation>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, hubPackageIds: { type: [String], default: [] }, status: { type: String, enum: ['DRAFT', 'SEALED', 'HANDED_OVER', 'CANCELLED'], default: 'DRAFT', index: true }, weightGrams: { type: Number, min: 0 }, dimensions: { type: Object }, sealReference: { type: String }, evidence, sealedAt: { type: Date }, sealedBy: { type: String }, version: { type: Number, default: 1, min: 1 },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, hubPackageIds: { type: [String], default: [] }, status: { type: String, enum: ['DRAFT', 'SEALED', 'HANDED_OVER', 'CANCELLED'], default: 'DRAFT', index: true }, weightGrams: { type: Number, min: 0 }, dimensions: { type: Object }, receiptPrints: { type: [Object], default: [] }, sealReference: { type: String }, evidence, sealedAt: { type: Date }, sealedBy: { type: String }, version: { type: Number, default: 1, min: 1 },
 });
-consolidationSchema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Unique per fulfilment group, not per state: an order split into several
+// deliveries has multiple groups in the same state. Sparse so legacy rows
+// written before fulfilmentGroupId existed do not collide on null.
+consolidationSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, sparse: true });
+consolidationSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const shipmentSchema = createSchema<Shipment>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true, index: true }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, releaseStatus: { type: String, enum: ['NOT_REQUIRED', 'AWAITING_HANDOVER_PAYMENT', 'RELEASE_APPROVED'] }, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true, index: true }, courierCode: { type: String, index: true }, courierName: { type: String }, substitutedFrom: { type: String }, substitutionReason: { type: String }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
 });
-shipmentSchema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Unique per fulfilment group, not per state: an order split into several
+// deliveries has multiple groups in the same state. Sparse so legacy rows
+// written before fulfilmentGroupId existed do not collide on null.
+shipmentSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, sparse: true });
+shipmentSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const manifestSchema = createSchema<PickupManifest>({
   publicId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, shipmentIds: { type: [String], default: [] }, status: { type: String, enum: ['OPEN', 'HANDED_OVER', 'CLOSED', 'CANCELLED'], default: 'OPEN', index: true }, handoverReference: { type: String }, evidence, handedOverAt: { type: Date }, handedOverBy: { type: String },
 });
 
-const exceptionSchema = createSchema<FulfilmentException>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, index: true }, taskId: { type: String, index: true }, hubId: { type: String, index: true }, shipmentId: { type: String, index: true }, sourceStateId: { type: String, index: true }, type: { type: String, enum: ['ASSIGNMENT_MISSING', 'HUB_MISSING', 'SLA_BREACH', 'ITEM_UNAVAILABLE', 'QC_FAILED', 'DELIVERY_FAILED', 'CUSTODY_OVERDUE', 'INTEGRATION'], required: true, index: true }, severity: { type: String, enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'], default: 'MEDIUM', index: true }, status: { type: String, enum: ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'DISMISSED'], default: 'OPEN', index: true }, summary: { type: String, required: true }, details: { type: Object }, dueAt: { type: Date, index: true }, openedBy: { type: String }, resolvedBy: { type: String }, resolutionNote: { type: String }, idempotencyKey: { type: String, unique: true, sparse: true },
-});
 
 const custodySchema = createSchema<PartnerCustody>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, unique: true, index: true }, shipmentId: { type: String, required: true, index: true }, partnerId: { type: String, required: true, index: true }, status: { type: String, enum: ['AWAITING_RECEIPT', 'IN_CUSTODY', 'RELEASED', 'OVERDUE', 'RECOVERY'], default: 'AWAITING_RECEIPT', index: true }, collectionCodeHash: { type: String, select: false }, collectionCodeHint: { type: String }, codeAttempts: { type: Number, default: 0 }, codeSentAt: { type: Date }, receivedAt: { type: Date }, releasedAt: { type: Date }, expiresAt: { type: Date, required: true, index: true }, customerEmailSnapshot: { type: String, required: true }, idempotencyKey: { type: String, unique: true, sparse: true }, history: { type: [Object], default: [] },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, unique: true, index: true }, shipmentId: { type: String, required: true, index: true }, partnerId: { type: String, required: true, index: true }, status: { type: String, enum: ['AWAITING_RECEIPT', 'IN_CUSTODY', 'RELEASED', 'OVERDUE', 'RECOVERY'], default: 'AWAITING_RECEIPT', index: true }, collectionCodeHash: { type: String, select: false }, collectionCodeHint: { type: String }, codeAttempts: { type: Number, default: 0 }, lastCodeAttemptAt: { type: Date }, codeSentAt: { type: Date }, receivedAt: { type: Date }, releasedAt: { type: Date }, expiresAt: { type: Date, required: true, index: true }, customerEmailSnapshot: { type: String, required: true }, idempotencyKey: { type: String, unique: true, sparse: true }, history: { type: [Object], default: [] },
 });
 
 const returnSchema = createSchema<ReturnRequest>({
@@ -303,11 +319,11 @@ const returnSchema = createSchema<ReturnRequest>({
 });
 
 const refundSchema = createSchema<FulfilmentRefund>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, paymentId: { type: String, index: true }, returnRequestId: { type: String, index: true }, amountMinor: { type: Number, required: true, min: 1 }, currency: { type: String, default: 'NGN' }, reason: { type: String, required: true }, status: { type: String, enum: ['REQUESTED', 'APPROVED', 'PROVIDER_PENDING', 'REFUNDED', 'FAILED'], default: 'REQUESTED', index: true }, providerReference: { type: String }, idempotencyKey: { type: String, required: true, unique: true }, approvedBy: { type: String }, processedAt: { type: Date }, failureReason: { type: String },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, paymentId: { type: String, index: true }, returnRequestId: { type: String, index: true }, amountMinor: { type: Number, required: true, min: 1 }, currency: { type: String, default: 'NGN' }, reason: { type: String, required: true }, status: { type: String, enum: ['REQUESTED', 'APPROVED', 'PROVIDER_PENDING', 'PROVIDER_UNKNOWN', 'REFUNDED', 'FAILED'], default: 'REQUESTED', index: true }, providerReference: { type: String }, idempotencyKey: { type: String, required: true, unique: true }, approvedBy: { type: String }, processedAt: { type: Date }, failureReason: { type: String },
 });
 
 const logisticsEventSchema = createSchema<LogisticsWebhookEvent>({
-  provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date },
+  provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date }, lockedUntil: { type: Date },
 });
 logisticsEventSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
 
@@ -317,7 +333,6 @@ export const HubPackage = createModel<HubPackage>('HubPackage', hubPackageSchema
 export const Consolidation = createModel<Consolidation>('Consolidation', consolidationSchema);
 export const Shipment = createModel<Shipment>('Shipment', shipmentSchema);
 export const PickupManifest = createModel<PickupManifest>('PickupManifest', manifestSchema);
-export const FulfilmentException = createModel<FulfilmentException>('FulfilmentException', exceptionSchema);
 export const PartnerCustody = createModel<PartnerCustody>('PartnerCustody', custodySchema);
 export const ReturnRequest = createModel<ReturnRequest>('ReturnRequest', returnSchema);
 export const FulfilmentRefund = createModel<FulfilmentRefund>('FulfilmentRefund', refundSchema);

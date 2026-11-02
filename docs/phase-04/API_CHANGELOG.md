@@ -1,6 +1,6 @@
 # Phase 4 API Changelog
 
-Added customer addresses, State basket clearing, State checkout preview/confirm, Paystack initialization/status/webhook, Partner assisted-commerce, POD Operations, payment exception/outbox visibility, and Commerce Settings.
+Added customer addresses, State basket clearing, State checkout preview/confirm, Paystack initialization/status/webhook, Partner assisted-commerce, payment exception/outbox visibility, and Commerce Settings.
 
 Removed active customer payment verification, generic Admin Order creation, generic Admin status mutation, and active OPay checkout defaults. Public and authenticated responses retain the Phase 2 `{ success, data, meta }` contract and public Hook IDs.
 

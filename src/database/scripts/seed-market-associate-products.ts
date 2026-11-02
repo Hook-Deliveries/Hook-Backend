@@ -8,7 +8,7 @@ import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
-import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicId } from '@modules/platform/public-id.service';
 import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from '../seeds/market-associate-product-catalog';
 
 dotenv.config({ quiet: true });

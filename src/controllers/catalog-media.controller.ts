@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { CatalogMediaService } from '@services/catalog-media.service';
+import { CatalogMediaService } from '@modules/catalog/catalog-media.service';
 import { sendCreated, sendSuccess } from '@utils/http';
 
 export class CatalogMediaController {

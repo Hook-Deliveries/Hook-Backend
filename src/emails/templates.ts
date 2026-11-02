@@ -4,6 +4,7 @@ import {
   AccountActivatedEmailPayload,
   AccountInvitationEmailPayload,
   AvailabilityDigestEmailPayload,
+  AccountDeletionEmailPayload,
   CustomerAccountSetupEmailPayload,
   NegotiationAcceptedEmailPayload,
   NegotiationOfferEmailPayload,
@@ -13,8 +14,10 @@ import {
   OtpEmailPayload,
   PaymentConfirmedEmailPayload,
   RefundEmailPayload,
+  BroadcastMessageEmailPayload,
   SubmissionDecisionEmailPayload,
   VendorDecisionEmailPayload,
+  WaitlistMessageEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
 
@@ -23,23 +26,26 @@ const templateDirs = [
   path.join(process.cwd(), 'src', 'emails', 'templates'),
 ];
 
+// Cached in memory since templates never change at runtime; avoids a synchronous disk read on every email render.
+const templateFileCache = new Map<string, string>();
+
 function readTemplateFile(fileName: string) {
+  const cached = templateFileCache.get(fileName);
+  if (cached !== undefined) return cached;
   for (const dir of templateDirs) {
     const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+    if (fs.existsSync(file)) {
+      const contents = fs.readFileSync(file, 'utf8');
+      templateFileCache.set(fileName, contents);
+      return contents;
+    }
   }
   throw new Error(`Email template not found: ${fileName}`);
 }
 
 const emailStyles = readTemplateFile('base.css');
 
-/**
- * Set once per send by EmailService before any render*Template() call, from
- * the DB-backed admin Email Configuration settings. Kept as a plain module
- * variable (not threaded through all 19 render functions' signatures) so
- * baseValues() stays synchronous — EmailService is the only place that needs
- * to know settings are DB-backed at all.
- */
+/** Set once per send by EmailService from the DB-backed Email Configuration settings, kept as a module variable so baseValues() stays synchronous. */
 let resolvedEmailSettings: { appName?: string; appUrl?: string; supportEmail?: string } = {};
 
 export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; supportEmail?: string }) {
@@ -66,9 +72,7 @@ function money(value = 0) {
 function renderTemplate(fileName: string, values: Record<string, unknown>) {
   const html = readTemplateFile(fileName);
   return html
-    // Triple braces inject trusted, internally-generated markup (e.g. the
-    // order line-item rows built by orderLinesHtml below). Never use this
-    // for values that originate from user input.
+    // Triple braces inject trusted, internally-generated markup; never use this for user-supplied values.
     .replace(/\{\{\{\s*([a-zA-Z0-9_]+)\s*\}\}\}/g, (_match, key) => String(values[key] ?? ''))
     .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
       if (key === 'emailStyles') return emailStyles;
@@ -76,14 +80,21 @@ function renderTemplate(fileName: string, values: Record<string, unknown>) {
     });
 }
 
-/**
- * Builds the itemised recap rows. Every value is escaped here because the
- * result is injected raw via the triple-brace token.
- */
+/** Builds the itemised recap rows; every value is escaped since the result is injected raw via the triple-brace token. */
 function orderLinesHtml(lines?: OrderEmailLine[]) {
   if (!lines?.length) return '';
+  // Laid out as a table, not flex: Outlook and several webmail clients drop flex entirely and would stack the thumbnail above the title.
   return lines
-    .map((line) => `<div class="line-item"><span class="line-title">${escapeHtml(line.title)}</span><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span><span class="line-price">${escapeHtml(money(line.amount))}</span></div>`)
+    .map((line) => {
+      const thumb = line.imageUrl
+        ? `<img class="line-thumb" src="${escapeHtml(line.imageUrl)}" alt="" width="48" height="48">`
+        : '<span class="line-thumb line-thumb-empty">&nbsp;</span>';
+      return `<table class="line-item" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>`
+        + `<td class="line-thumb-cell" width="48">${thumb}</td>`
+        + `<td class="line-text-cell"><span class="line-title">${escapeHtml(line.title)}</span><br><span class="line-qty">Quantity ${escapeHtml(line.quantity)}</span></td>`
+        + `<td class="line-price-cell" align="right"><span class="line-price">${escapeHtml(money(line.amount))}</span></td>`
+        + `</tr></table>`;
+    })
     .join('');
 }
 
@@ -93,10 +104,7 @@ function optionalRowHtml(label: string, value?: number) {
   return `<div class="row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(money(value))}</span></div>`;
 }
 
-/**
- * The dark delivery block. Rendered whole (or not at all) because the template
- * engine only substitutes values — it has no conditionals.
- */
+/** The dark delivery block, rendered whole or not at all since the template engine only substitutes values and has no conditionals. */
 function deliveryBlockHtml(payload: { deliveryAddress?: string; expectedDeliveryDate?: string; appUrl: string }) {
   if (!payload.deliveryAddress && !payload.expectedDeliveryDate) return '';
   const columns = [
@@ -153,6 +161,41 @@ export function welcomeEmailTemplate(payload: WelcomeEmailPayload) {
     subject: 'Welcome to Hook',
     html: renderTemplate('welcome.html', baseValues({ name: payload.name || 'there' })),
     text: `Welcome to Hook${payload.name ? `, ${payload.name}` : ''}.`,
+  };
+}
+
+/** An admin-composed message to a waitlist entry; the free-text body is escaped and turned into paragraphs rather than trusted as HTML. */
+export function waitlistMessageEmailTemplate(payload: WaitlistMessageEmailPayload) {
+  const messageHtml = payload.message
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p class="lead">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    subject: payload.subject,
+    html: renderTemplate('waitlist-message.html', baseValues({
+      name: payload.name || 'there',
+      subject: payload.subject,
+      messageHtml,
+      unsubscribeUrl: payload.unsubscribeUrl,
+    })),
+    text: `${payload.message}\n\nNo longer want these emails? Unsubscribe: ${payload.unsubscribeUrl}`,
+  };
+}
+
+/** An admin-composed message to an existing account (Communications page) — no unsubscribe link, since this only reaches accounts that already exist, not a marketing list. */
+export function broadcastMessageEmailTemplate(payload: BroadcastMessageEmailPayload) {
+  const messageHtml = payload.message
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p class="lead">${escapeHtml(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+  return {
+    subject: payload.subject,
+    html: renderTemplate('broadcast-message.html', baseValues({
+      name: payload.name || 'there',
+      subject: payload.subject,
+      messageHtml,
+    })),
+    text: payload.message,
   };
 }
 
@@ -236,6 +279,21 @@ export function hookNewOrderEmailTemplate(payload: OrderEmailPayload) {
   };
 }
 
+/** Sent when a payment link is created, so a customer who abandons checkout still has the link in their inbox. */
+export function orderAwaitingPaymentEmailTemplate(payload: OrderEmailPayload & { paymentUrl: string }) {
+  return {
+    subject: `Complete your payment for ${payload.orderCode}`,
+    html: renderTemplate('order-awaiting-payment.html', baseValues({
+      name: payload.name || 'there',
+      orderCode: payload.orderCode,
+      amount: money(payload.amount),
+      paymentUrl: payload.paymentUrl,
+      orderLines: orderLinesHtml(payload.lines),
+    })),
+    text: `Complete your payment for Hook order ${payload.orderCode} (${money(payload.amount)}): ${payload.paymentUrl}`,
+  };
+}
+
 export function orderStatusUpdateEmailTemplate(payload: OrderEmailPayload) {
   return {
     subject: `Hook order update: ${payload.orderCode}`,
@@ -244,8 +302,12 @@ export function orderStatusUpdateEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       status: payload.status || 'updated',
       amount: money(payload.amount),
+
+      detailHtml: payload.detail ? `<p class="lead">${escapeHtml(payload.detail)}</p>` : '',
+      orderLines: payload.lines?.length ? `<div class="panel">${orderLinesHtml(payload.lines)}</div>` : '',
     })),
-    text: `Your Hook order ${payload.orderCode} is now ${payload.status || 'updated'}.`,
+
+    text: `Update on your Hook order ${payload.orderCode}: ${payload.status || 'updated'}.${payload.detail ? ` ${payload.detail}` : ''}`,
   };
 }
 
@@ -395,5 +457,78 @@ export function availabilityDigestEmailTemplate(payload: AvailabilityDigestEmail
       productRows: availabilityProductRowsHtml(payload.products),
     })),
     text: `${payload.products.length} product(s) need an availability check: ${payload.products.map((product) => `${product.title} (${product.marketName})`).join(', ')}`,
+  };
+}
+
+/** One layout, five moods; every value is escaped by renderTemplate except the triple-brace blocks, built here from escaped parts. */
+export function accountDeletionEmailTemplate(payload: AccountDeletionEmailPayload) {
+  const date = payload.scheduledFor || 'the scheduled date';
+  const cancelButton = payload.cancelUrl
+    ? `<p style="text-align: center"><a class="button" href="${escapeHtml(payload.cancelUrl)}">Keep my account</a></p>`
+    : '';
+  const copy = {
+    code: {
+      subject: 'Your Hook account deletion code',
+      title: 'Confirm account deletion',
+      intro: 'Use this code to confirm you want to delete your Hook account. If this was not you, ignore this email and nothing will change.',
+      detail: `The code expires in ${payload.expiresInMinutes || 10} minutes.`,
+      safety: 'Never share this code. Hook will never ask you for it.',
+      codeBlock: payload.code ? `<div class="code">${escapeHtml(payload.code)}</div>` : '',
+      button: '',
+      text: `Your Hook account deletion code is ${payload.code}. It expires in ${payload.expiresInMinutes || 10} minutes. If this was not you, ignore this email.`,
+    },
+    scheduled: {
+      subject: 'Your Hook account is scheduled for deletion',
+      title: 'Account deletion scheduled',
+      intro: `We received a request to delete your Hook account. It will be permanently deleted on ${date}.`,
+      detail: 'You can change your mind at any time before then. Just choose the button below, or sign in to the app and restore your account.',
+      safety: 'If you did not make this request, choose "Keep my account" straight away and change your password.',
+      codeBlock: '',
+      button: cancelButton,
+      text: `Your Hook account will be permanently deleted on ${date}. To keep it, open ${payload.cancelUrl || 'the Hook app and restore your account'}.`,
+    },
+    reminder: {
+      subject: 'Your Hook account will be deleted soon',
+      title: 'Deletion is coming up',
+      intro: `Your Hook account is due to be permanently deleted on ${date}.`,
+      detail: 'This is your last reminder. After that date your account, saved addresses and Hook credit balance cannot be recovered.',
+      safety: 'If you still want to delete your account you do not need to do anything.',
+      codeBlock: '',
+      button: cancelButton,
+      text: `Your Hook account will be permanently deleted on ${date}. To keep it, open ${payload.cancelUrl || 'the Hook app and restore your account'}.`,
+    },
+    deleted: {
+      subject: 'Your Hook account has been deleted',
+      title: 'Account deleted',
+      intro: 'Your Hook account and personal data have been permanently deleted.',
+      detail: 'We keep only the order and payment records the law requires us to hold, with your identity removed. Thank you for having shopped with Hook.',
+      safety: 'This is the last email we will send to this address about your account.',
+      codeBlock: '',
+      button: '',
+      text: 'Your Hook account and personal data have been permanently deleted.',
+    },
+    restored: {
+      subject: 'Your Hook account has been restored',
+      title: 'Welcome back',
+      intro: 'Your deletion request was cancelled and your Hook account is active again.',
+      detail: 'Nothing was removed. You can sign in to the app as usual.',
+      safety: 'If you did not do this, change your password right away.',
+      codeBlock: '',
+      button: '',
+      text: 'Your deletion request was cancelled and your Hook account is active again.',
+    },
+  }[payload.kind];
+  return {
+    subject: copy.subject,
+    html: renderTemplate('account-deletion.html', baseValues({
+      name: payload.name || 'there',
+      title: copy.title,
+      intro: copy.intro,
+      detail: copy.detail,
+      safety: copy.safety,
+      codeBlock: copy.codeBlock,
+      button: copy.button,
+    })),
+    text: copy.text,
   };
 }

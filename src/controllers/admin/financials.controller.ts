@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { EscrowEventType, PaymentStatus, SettlementStatus } from '@lib/constants';
 import { HttpError, sendSuccess } from '@utils/http';
 import { actor, adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
-import { PaymentService } from '@services/payment.service';
+import { PaymentService } from '@modules/payments/payment.service';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
 import { Settlement } from '@models/settlements/settlement.model';

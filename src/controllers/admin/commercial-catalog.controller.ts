@@ -1,63 +1,21 @@
 import { Request, Response } from 'express';
 import { ScopeType } from '@lib/constants';
 import { routeParam } from '@lib/api-utils';
-import { CommercialCatalogService, publicProductRepresentation } from '@services/commercial-catalog.service';
-import { Product } from '@models/products/product.model';
-import { recordAudit } from '@services/platform-audit.service';
+import { CommercialCatalogService } from '@modules/catalog/commercial-catalog.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { sendSuccess } from '@utils/http';
-import { presentCommercialList, presentCommercialSummary } from '@services/catalog-presentation.service';
-import { adminCatalogCache } from '@lib/ttl-cache';
-import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { presentCommercialSummary } from '@modules/catalog/catalog-presentation.service';
+import { CatalogAvailabilityService } from '@modules/catalog/catalog-availability.service';
 
 function stateScope(req: Request) {
   if (req.platformContext?.stateId) return [req.platformContext.stateId];
   return req.user?.scopeType === ScopeType.GLOBAL ? undefined : req.user?.assignedStateIds;
 }
 
+/** Product lifecycle/negotiation-rules/availability actions, now mounted under /admin/products/:id/* since the standalone Commercial Catalog page (and its other endpoints) was retired in favor of Product Inventory. */
 export class AdminCommercialCatalogController {
   private readonly catalog = new CommercialCatalogService();
   private readonly availability = new CatalogAvailabilityService();
-
-  dashboard = async (req: Request, res: Response) => {
-    const scope = stateScope(req);
-    const cacheKey = `commercial:${scope?.join(',') || 'global'}`;
-    const cached = adminCatalogCache.get(cacheKey);
-    if (cached) {
-      sendSuccess(res, cached);
-      return;
-    }
-    const response = await this.catalog.dashboard(scope);
-    adminCatalogCache.set(cacheKey, response);
-    sendSuccess(res, response);
-  };
-  list = async (req: Request, res: Response) => {
-    const result = await this.catalog.list(req.query, stateScope(req));
-    sendSuccess(res, { ...result, data: result.data.map(presentCommercialList) });
-  };
-  detail = async (req: Request, res: Response) => sendSuccess(
-    res,
-    presentCommercialSummary(await this.catalog.detail(routeParam(req.params.id), stateScope(req))),
-  );
-
-  preview = async (req: Request, res: Response) => {
-    const detail = await this.catalog.detail(routeParam(req.params.id), stateScope(req));
-    const product = await Product.findById(detail._id).lean({ virtuals: true });
-    sendSuccess(res, await publicProductRepresentation(product));
-  };
-
-  update = async (req: Request, res: Response) => {
-    const before = await this.catalog.detail(routeParam(req.params.id), stateScope(req));
-    const updated = await this.catalog.update(routeParam(req.params.id), req.body, req.user!.sub, stateScope(req));
-    await this.audit(req, 'catalog.product.updated', before, updated);
-    sendSuccess(res, presentCommercialSummary(updated));
-  };
-
-  pricing = async (req: Request, res: Response) => {
-    const before = await this.catalog.detail(routeParam(req.params.id), stateScope(req));
-    const updated = await this.catalog.pricing(routeParam(req.params.id), req.body, req.user!.sub, stateScope(req));
-    await this.audit(req, 'catalog.product.pricing_updated', before.pricing, updated.pricing, req.body.reason, updated);
-    sendSuccess(res, presentCommercialSummary(updated));
-  };
 
   rules = async (req: Request, res: Response) => {
     const before = await this.catalog.detail(routeParam(req.params.id), stateScope(req));

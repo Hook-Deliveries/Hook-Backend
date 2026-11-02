@@ -2,6 +2,13 @@ import { NegotiationStatus } from '@lib/constants';
 import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 export interface NegotiationMessage {
+  sequence?: number;
+  requestId?: string;
+  id?: string;
+  kind?: 'text' | 'suggestions' | 'action' | 'receipt';
+  productIds?: string[];
+  actionId?: string;
+  quantity?: number;
   role: 'customer' | 'hook';
   message: string;
   offeredPriceMinor?: number;
@@ -10,6 +17,9 @@ export interface NegotiationMessage {
 }
 
 export interface Negotiation extends BaseEntity {
+  commandLock?: { owner: string; expiresAt: Date };
+  startNotificationPending?: boolean;
+  shoppingActions?: Array<{ id: string; state: 'pending' | 'executing' | 'completed'; quantity: number; quoteId: string; leaseUntil?: Date; executionId?: string; receipt?: Record<string, unknown> }>;
   publicId?: string;
   customerId?: string;
   guestSessionId?: string;
@@ -79,6 +89,8 @@ export interface Negotiation extends BaseEntity {
 }
 
 const schema = createSchema<Negotiation>({
+  commandLock: { type: Object },
+  startNotificationPending: { type: Boolean, index: true },
   publicId: { type: String, unique: true, sparse: true, index: true },
   customerId: { type: String, index: true, sparse: true },
   guestSessionId: { type: String, index: true, sparse: true },
@@ -94,6 +106,7 @@ const schema = createSchema<Negotiation>({
   offerCount: { type: Number, default: 0, min: 0 },
   maximumOffers: { type: Number, default: 3, min: 1, max: 10 },
   transcript: { type: [Object], default: [] },
+  shoppingActions: { type: [Object], default: [] },
   rulesSnapshot: { type: Object },
   language: { type: String, enum: ['english', 'pidgin'], default: 'english' },
   lastDecision: { type: String, enum: ['ACCEPT', 'COUNTER', 'DECLINE'] },

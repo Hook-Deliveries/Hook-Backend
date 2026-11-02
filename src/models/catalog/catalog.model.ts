@@ -31,11 +31,16 @@ export interface ProductSubmission extends BaseEntity {
   basicTitle: string;
   notes?: string;
   mediaIds: string[];
+  mediaViews?: { front?: string; side?: string; back?: string };
+  captureChecklistConfirmed?: boolean;
   basePriceMinor: number;
   currency: string;
   variants: SubmissionVariant[];
   availabilityStatus: ProductAvailabilityStatus;
   availabilityNote?: string;
+  /** When the Market Associate confirmed on the market that this item is available (set on submit). */
+  availabilityVerifiedAt?: Date;
+  /** Derived from the source supplier when the capture is saved; never typed in by hand. */
   internalSellerReference?: string;
   status: ProductSubmissionStatus;
   reviewNotes: ReviewNote[];
@@ -108,6 +113,8 @@ const submissionSchema = createSchema<ProductSubmission>({
   basicTitle: { type: String, required: true, trim: true, maxlength: 180 },
   notes: { type: String, maxlength: 2000 },
   mediaIds: { type: [String], default: [] },
+  mediaViews: { type: Object, default: {} },
+  captureChecklistConfirmed: { type: Boolean, default: false },
   basePriceMinor: { type: Number, required: true, min: 1 },
   currency: { type: String, required: true, uppercase: true, default: 'NGN' },
   variants: { type: [Object], default: [] },
@@ -118,6 +125,7 @@ const submissionSchema = createSchema<ProductSubmission>({
     index: true,
   },
   availabilityNote: { type: String, maxlength: 500 },
+  availabilityVerifiedAt: { type: Date },
   internalSellerReference: { type: String, maxlength: 300 },
   status: {
     type: String,

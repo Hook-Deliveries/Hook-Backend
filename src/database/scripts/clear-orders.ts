@@ -1,7 +1,8 @@
 import mongoose, { Model } from 'mongoose';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
-import { CheckoutPreview, CommerceOutboxEvent, IntegrationException, PaymentWebhookEvent, PodCallRecord, PodOverride } from '@models/commerce/commerce.model';
-import { Consolidation, FulfilmentException, FulfilmentRefund, FulfilmentTask, HubPackage, LogisticsWebhookEvent, PartnerCustody, PickupManifest, ReturnRequest, RunnerPackage, Shipment } from '@models/fulfilment/fulfilment.model';
+import { CheckoutPreview, IntegrationException, PaymentWebhookEvent } from '@models/commerce/commerce.model';
+import { CommerceOutboxEvent } from '@modules/platform/outbox.model';
+import { Consolidation, FulfilmentRefund, FulfilmentTask, HubPackage, LogisticsWebhookEvent, PartnerCustody, PickupManifest, ReturnRequest, RunnerPackage, Shipment } from '@models/fulfilment/fulfilment.model';
 import { Logistics } from '@models/logistics/logistics.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
 import { OrderItem } from '@models/orders/order-item.model';
@@ -47,15 +48,12 @@ async function main() {
     { label: 'Partner custody', model: PartnerCustody, filter: { orderId: { $in: orderRefs } } },
     { label: 'Logistics webhooks', model: LogisticsWebhookEvent, filter: { shipmentId: { $in: shipmentRefs } } },
     { label: 'Pickup manifests', model: PickupManifest, filter: { shipmentIds: { $in: shipmentRefs } } },
-    { label: 'Operational exceptions', model: FulfilmentException, filter: { $or: [{ orderId: { $in: orderRefs } }, { taskId: { $in: taskRefs } }, { shipmentId: { $in: shipmentRefs } }] } },
     { label: 'Shipments', model: Shipment, filter: { orderId: { $in: orderRefs } } },
     { label: 'Consolidations', model: Consolidation, filter: { orderId: { $in: orderRefs } } },
     { label: 'Hub packages', model: HubPackage, filter: { orderId: { $in: orderRefs } } },
     { label: 'Runner packages', model: RunnerPackage, filter: { orderId: { $in: orderRefs } } },
     { label: 'Fulfilment tasks', model: FulfilmentTask, filter: { orderId: { $in: orderRefs } } },
     { label: 'Legacy logistics', model: Logistics, filter: { orderId: { $in: orderRefs } } },
-    { label: 'POD overrides', model: PodOverride, filter: { orderId: { $in: orderRefs } } },
-    { label: 'POD call records', model: PodCallRecord, filter: { orderId: { $in: orderRefs } } },
     { label: 'Commerce outbox events', model: CommerceOutboxEvent, filter: { aggregateId: { $in: orderRefs } } },
     { label: 'Legacy refund requests', model: RefundRequest, filter: { orderId: { $in: orderRefs } } },
     { label: 'Legacy vendor fulfilments', model: VendorFulfilment, filter: { orderId: { $in: orderRefs } } },

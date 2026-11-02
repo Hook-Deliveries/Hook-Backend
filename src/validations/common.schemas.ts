@@ -23,11 +23,14 @@ export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
   guestId: z.string().min(12).optional(),
+  deviceId: z.string().trim().min(1).max(120).optional(),
+  deviceName: z.string().trim().min(1).max(120).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
 });
 
 export const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8),
 });
 
 export const profileSchema = z.object({
@@ -43,20 +46,20 @@ export const passwordResetRequestSchema = z.object({ email: z.string().email() }
 export const passwordResetSchema = z.object({
   email: z.string().email(),
   code: z.string().min(4),
-  password: z.string().min(6),
+  password: z.string().min(8),
+  deviceId: z.string().trim().min(1).max(120).optional(),
+  deviceName: z.string().trim().min(1).max(120).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
 });
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(6),
+  newPassword: z.string().min(8),
 });
 
 export const cartItemSchema = z.object({
   productId: idSchema,
   quantity: z.coerce.number().int().positive(),
-  selectedVariants: z.object({
-    color: z.string().optional(),
-    size: z.string().optional(),
-  }).optional(),
+  selectedVariants: z.record(z.string().min(1).max(40), z.string().max(80)).optional(),
 });
 
 export const cartQuantitySchema = z.object({ quantity: z.coerce.number().int().positive() });
@@ -104,7 +107,7 @@ export const negotiationSchema = z.object({
 
 export const paymentInitializeSchema = z.object({
   orderId: idSchema,
-  gateway: z.literal('opay').default('opay'),
+  gateway: z.enum(['paystack', 'monnify']).default('paystack'),
   paymentMethod: z.enum(['card', 'bank_transfer', 'ussd', 'pos']).default('card'),
   savePaymentMethod: z.boolean().default(false),
 });
@@ -124,7 +127,7 @@ export const vendorBankSchema = z.object({
   bankCode: z.string().min(1),
 });
 
-const productBaseSchema = z.object({
+export const productBaseSchema = z.object({
   title: z.string().min(2),
   description: z.string().optional(),
   costPrice: z.coerce.number().positive(),
@@ -146,7 +149,7 @@ const productBaseSchema = z.object({
   sizes: z.array(z.string()).optional(),
 });
 
-function validateNegotiationFloor(
+export function validateNegotiationFloor(
   data: { minAcceptablePrice?: number; sellingPrice?: number },
   ctx: z.RefinementCtx,
 ) {
@@ -204,6 +207,10 @@ export const adminProductUpdateSchema = productBaseSchema.extend({
     ProductStatus.UNPUBLISHED,
     ProductStatus.DISABLED,
   ]).optional(),
+  // Admin-only reassignment of the supplying market vendor; an empty string clears the link.
+  sourceMarketVendorId: z.string().trim().max(80).optional(),
+  // Required only when a price field changes, which the controller enforces since this schema can't see the stored value.
+  reason: z.string().trim().min(5).max(500).optional(),
 }).partial().superRefine(validateNegotiationFloor);
 
 export const adminOrderCreateSchema = z.object({
@@ -288,17 +295,32 @@ export const adminUserSchema = z.object({
 });
 
 const sizingGuideSchema = z.object({
+  /** Admin switch: false hides the guide everywhere without deleting it. */
+  enabled: z.boolean().optional(),
   summary: z.string().max(200).optional(),
   howToMeasure: z.string().max(2000).optional(),
-  presetGroups: z.array(z.enum(['clothing', 'shoes', 'general'])).max(3).default([]),
+  presetGroups: z.array(z.enum(['clothing', 'uk-dress', 'shoes', 'kids-shoes', 'bra', 'general'])).max(5).default([]),
   chart: z.array(z.object({
     size: z.string().min(1).max(40),
     measurements: z.record(z.string(), z.string().max(60)).default({}),
   })).max(20).optional(),
 }).strict().optional();
 
+export const categoryAttributeSchema = z.object({
+  key: z.string().trim().min(1).max(40).regex(/^[a-zA-Z][a-zA-Z0-9]*$/, 'Use letters and numbers only'),
+  label: z.string().trim().min(1).max(60),
+  type: z.enum(['size', 'colour', 'select', 'text']),
+  required: z.boolean(),
+  options: z.array(z.string().trim().min(1).max(60)).max(60).optional(),
+  preset: z.enum(['clothing', 'uk-dress', 'shoes', 'kids-shoes', 'bra', 'general']).optional(),
+  variantAxis: z.boolean(),
+}).strict();
+
 export const categoryCreateSchema = z.object({
   name: z.string().min(2).max(60),
+  /** Public or internal id of the parent. Omit for a top-level category. */
+  parentId: z.string().min(3).max(80).optional(),
+  attributes: z.array(categoryAttributeSchema).max(12).optional(),
   description: z.string().max(300).optional(),
   iconUrl: z.string().url().optional(),
   sortOrder: z.coerce.number().int().min(0).optional(),
@@ -321,18 +343,83 @@ export const giftCreateSchema = z.object({
 });
 export const giftClaimSchema = z.object({ token: z.string().min(32) });
 export const boothInventorySchema = z.object({ productIds: z.array(idSchema).max(500) });
-export const deletionRequestSchema = z.object({ reason: z.string().trim().max(1000).optional() });
-export const deletionUpdateSchema = z.object({
-  status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']),
-  assignedTo: idSchema.optional(),
-});
-export const checkoutEventSchema = z.object({
-  sessionId: z.string().min(8).max(100),
-  orderId: idSchema.optional(),
-  event: z.enum(['payment_options_shown', 'payment_method_selected', 'checkout_abandoned', 'payment_initiated', 'payment_completed', 'refund_requested', 'order_cancelled', 'delivered']),
-  paymentMode: z.nativeEnum(PaymentMode).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
+// Account deletion: ownership is proven with a password, or an emailed code for passwordless Google/Apple accounts.
+const ownerProof = {
+  password: z.string().min(1).max(200).optional(),
+  code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code').optional(),
+};
+const exactlyOneProof = (value: { password?: string; code?: string }) => (value.password !== undefined) !== (value.code !== undefined);
+const proofMessage = { message: 'Provide either your password or the emailed code' };
+const emailField = z.string().trim().toLowerCase().email().max(254);
+export const publicDeletionRequestSchema = z
+  .object({ email: emailField, ...ownerProof, reason: z.string().trim().max(1000).optional() })
+  .strict()
+  .refine(exactlyOneProof, proofMessage);
+export const publicDeletionProofSchema = z
+  .object({ email: emailField, ...ownerProof })
+  .strict()
+  .refine(exactlyOneProof, proofMessage);
+export const publicDeletionCodeSchema = z.object({ email: emailField }).strict();
+export const publicDeletionCancelSchema = z.union([
+  z.object({ token: z.string().min(20).max(200) }).strict(),
+  publicDeletionProofSchema,
+]);
+export const waitlistJoinSchema = z.object({
+  email: emailField,
+  name: z.string().trim().min(2).max(120),
+  phone: z.string().trim().regex(/^\+?[0-9\s-]{7,20}$/, 'Enter a valid phone number'),
+  city: z.string().trim().min(2).max(120),
+  // Optional: the landing page's free-text prompt, not every signup will answer it.
+  itemInterest: z.string().trim().max(1000).optional(),
+  // A ticked consent checkbox so the landing page cannot join people without asking them first.
+  consent: z.literal(true, { message: 'Consent to be contacted is required to join the waitlist' }),
+}).strict();
+export const waitlistBroadcastSchema = z.object({
+  subject: z.string().trim().min(3).max(150),
+  message: z.string().trim().min(3).max(5000),
+  targetIds: z.array(z.string().trim().min(3).max(80)).max(5000).optional(),
+}).strict();
+export const waitlistGiftSchema = z.object({
+  amountMinor: z.coerce.number().int().positive().max(100_000_000),
+  reason: z.string().trim().min(5).max(300),
+  targetIds: z.array(z.string().trim().min(3).max(80)).max(5000).optional(),
+}).strict();
+export const adminGiftCreditSchema = z.object({
+  amountMinor: z.coerce.number().int().positive().max(100_000_000),
+  reason: z.string().trim().min(5).max(300),
+  idempotencyKey: z.string().trim().min(10).max(160),
+}).strict();
+const communicationsAudienceSchema = z.union([
+  z.object({ segment: z.literal('customers') }).strict(),
+  z.object({ segment: z.literal('market_associates'), stateIds: z.array(z.string().trim().min(1).max(80)).max(60).optional() }).strict(),
+  z.object({ segment: z.literal('staff'), roleKey: z.string().trim().min(1).max(80).optional() }).strict(),
+  z.object({ userIds: z.array(z.string().trim().min(3).max(80)).min(1).max(5000) }).strict(),
+]);
+export const communicationsPreviewSchema = z.object({
+  audience: communicationsAudienceSchema,
+}).strict();
+export const communicationsSendSchema = z.object({
+  title: z.string().trim().min(3).max(150),
+  body: z.string().trim().min(3).max(2000),
+  channels: z.array(z.enum(['push', 'email', 'inbox'])).min(1).max(3),
+  audience: communicationsAudienceSchema,
+}).strict();
+export const faqCreateSchema = z.object({
+  question: z.string().trim().min(3).max(200),
+  answer: z.string().trim().min(3).max(2000),
+  order: z.coerce.number().int().min(0).max(10000).optional(),
+  isActive: z.boolean().optional(),
+}).strict();
+export const faqUpdateSchema = faqCreateSchema.partial();
+export const deletionUpdateSchema = z
+  .object({
+    // erase_now skips the remaining cooling-off for a verified legal request, but still refuses mid-order or mid-refund.
+    action: z.enum(['pause', 'resume', 'cancel', 'erase_now']).optional(),
+    // Older admin builds send a status instead of an action.
+    status: z.enum(['identity_verified', 'cooling_off', 'approved', 'anonymized', 'cancelled']).optional(),
+    assignedTo: idSchema.optional(),
+  })
+  .refine((value) => value.action !== undefined || value.status !== undefined, { message: 'An action is required' });
 export const logisticsStatusSchema = z.object({ status: z.nativeEnum(LogisticsStatus) });
 export const productReviewSchema = z.object({
   status: z.nativeEnum(ProductStatus),
@@ -363,7 +450,10 @@ export const adminRefundReviewSchema = z.object({
   assignedSupportUserId: idSchema.optional(),
   decisionNote: z.string().trim().min(3).max(1000),
 });
-export const settingsSchema = z.record(z.string(), z.unknown());
+export const settingsSchema = z.record(z.string(), z.unknown()).refine(
+  (data) => typeof data.reason === 'string' && data.reason.trim().length >= 5,
+  { message: 'A reason of at least 5 characters is required', path: ['reason'] },
+);
 export const reportSchema = z.object({ type: z.string().default('sales') });
 
 export { NegotiationStatus, PaymentStatus };

@@ -7,7 +7,7 @@ export interface CartItem extends BaseEntity {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
-  selectedVariants?: { color?: string; size?: string };
+  selectedVariants?: Record<string, string | undefined>;
   variantKey: string;
   variantId?: string;
   marketId?: string;

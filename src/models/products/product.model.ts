@@ -7,6 +7,8 @@ export interface Product extends BaseEntity {
   sourceSubmissionId?: string;
   sourceMarketVendorId?: string;
   sourceMarketAssociateId?: string;
+  /** Supplier id and name the product was captured from, for staff only. */
+  internalSellerReference?: string;
   marketId?: string;
   sourceStateId?: string;
   title: string;
@@ -64,6 +66,8 @@ export interface Product extends BaseEntity {
   /** Legacy source reference retained until Market/ProductSource migration. */
   vendorId?: string;
   categoryId: string;
+  /** Set by the category migration for products filed under a category that is no longer a leaf. Staff move them into the new tree. */
+  needsRecategorisation?: boolean;
   fieldAgentId?: string;
   source?: 'vendor' | 'field_agent' | 'admin';
   vendor?: any;
@@ -75,6 +79,7 @@ const ProductSchema = createSchema<Product>({
   sourceSubmissionId: { type: String, unique: true, sparse: true, index: true },
   sourceMarketVendorId: { type: String, index: true, sparse: true },
   sourceMarketAssociateId: { type: String, index: true, sparse: true },
+  internalSellerReference: { type: String, maxlength: 300 },
   marketId: { type: String, index: true, sparse: true },
   sourceStateId: { type: String, index: true, sparse: true },
   title: { type: String, required: true, trim: true },
@@ -133,6 +138,7 @@ const ProductSchema = createSchema<Product>({
   averageRating: { type: Number, default: 0 },
   vendorId: { type: String, index: true, sparse: true },
   categoryId: { type: String, required: true, index: true },
+  needsRecategorisation: { type: Boolean, index: true, sparse: true },
   fieldAgentId: { type: String, index: true, sparse: true },
   source: { type: String, enum: ['vendor', 'field_agent', 'admin'], default: 'admin' },
   deletedAt: { type: Date },

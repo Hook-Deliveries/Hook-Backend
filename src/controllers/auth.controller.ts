@@ -7,8 +7,20 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
-import { AuthService } from '@services/auth.service';
+import { AuthService } from '@modules/identity/auth.service';
+import type { SessionMetadata } from '@modules/identity/account-session.service';
+import { recordSignInAudit } from '@modules/platform/platform-audit.service';
 import { sendCreated, sendSuccess } from '@utils/http';
+
+function sessionMetadata(req: Request): SessionMetadata {
+  return {
+    deviceId: typeof req.body?.deviceId === 'string' ? req.body.deviceId : undefined,
+    deviceName: typeof req.body?.deviceName === 'string' ? req.body.deviceName : undefined,
+    platform: typeof req.body?.platform === 'string' ? req.body.platform : undefined,
+    ipAddress: req.ip,
+    userAgent: req.header('user-agent'),
+  };
+}
 
 export class AuthController {
   private readonly auth = new AuthService(
@@ -36,17 +48,24 @@ export class AuthController {
     const portal = requestedPortal === 'staff' || requestedPortal === 'customer'
       ? requestedPortal
       : 'auto';
-    sendSuccess(res, await this.auth.login(req.body.email, req.body.password, portal));
+    try {
+      const session = await this.auth.login(req.body.email, req.body.password, portal, sessionMetadata(req));
+      if (portal !== 'customer') await recordSignInAudit(req, req.body.email, 'success');
+      sendSuccess(res, session);
+    } catch (error) {
+      if (portal !== 'customer') await recordSignInAudit(req, req.body.email, 'failed', error instanceof Error ? error.message : undefined);
+      throw error;
+    }
   };
 
   googleLogin = async (req: Request, res: Response) => {
     sendSuccess(res, await this.auth.loginWithGoogle({
       idToken: req.body.idToken,
-    }));
+    }, sessionMetadata(req)));
   };
 
   appleLogin = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.loginWithApple(req.body));
+    sendSuccess(res, await this.auth.loginWithApple(req.body, sessionMetadata(req)));
   };
 
   profile = async (req: Request, res: Response) => {
@@ -58,7 +77,7 @@ export class AuthController {
   };
 
   verifyOtp = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.verifyOtp(req.body.email, req.body.code));
+    sendSuccess(res, await this.auth.verifyOtp(req.body.email, req.body.code, sessionMetadata(req)));
   };
 
   startSignup = async (req: Request, res: Response) => {
@@ -74,7 +93,7 @@ export class AuthController {
   };
 
   completeSignup = async (req: Request, res: Response) => {
-    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, req.body), 'Account created successfully');
+    sendCreated(res, await this.auth.completeSignup(req.body.signupSessionToken, req.body, sessionMetadata(req)), 'Account created successfully');
   };
 
   completeProfile = async (req: Request, res: Response) => {
@@ -98,7 +117,7 @@ export class AuthController {
   };
 
   resetPassword = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.resetPassword(req.body.email, req.body.code, req.body.password));
+    sendSuccess(res, await this.auth.resetPassword(req.body.email, req.body.code, req.body.password, sessionMetadata(req)));
   };
 
   requestAdminPasswordReset = async (req: Request, res: Response) => {

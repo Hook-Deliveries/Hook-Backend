@@ -72,7 +72,6 @@ export enum OrderStatus {
 
 export enum CommercePaymentMethod {
   PREPAID = 'PREPAID',
-  PAY_AT_HANDOVER = 'PAY_AT_HANDOVER',
 }
 
 export enum CommercePaymentStatus {
@@ -80,7 +79,6 @@ export enum CommercePaymentStatus {
   PROCESSING = 'PROCESSING',
   CONFIRMED = 'CONFIRMED',
   FAILED = 'FAILED',
-  DUE_AT_HANDOVER = 'DUE_AT_HANDOVER',
   REFUND_PENDING = 'REFUND_PENDING',
   REFUNDED = 'REFUNDED',
 }
@@ -148,8 +146,6 @@ export enum ShipmentStatus {
   PICKED_UP = 'PICKED_UP',
   IN_TRANSIT = 'IN_TRANSIT',
   OUT_FOR_DELIVERY = 'OUT_FOR_DELIVERY',
-  AWAITING_HANDOVER_PAYMENT = 'AWAITING_HANDOVER_PAYMENT',
-  RELEASE_APPROVED = 'RELEASE_APPROVED',
   DELIVERED = 'DELIVERED',
   DELIVERY_FAILED = 'DELIVERY_FAILED',
   RETURN_IN_TRANSIT = 'RETURN_IN_TRANSIT',
@@ -169,7 +165,6 @@ export enum DeliveryMethod {
 
 export enum PaymentMode {
   PAY_NOW = 'pay_now',
-  PAY_ON_DELIVERY = 'pay_on_delivery',
 }
 
 export enum OrderType {
@@ -299,6 +294,6 @@ export const ESCROW_HOLD_HOURS = 24;
 export const DELIVERY_SLA_HOURS = 24;
 export const DEFAULT_DELIVERY_FEE = 3000;
 export const DEFAULT_DELIVERY_FEE_MINOR = 300000;
-export const DEFAULT_POD_LIMIT_MINOR = 10000000;
+
 export const VENDOR_CONFIRMATION_HOURS = 2;
 export const GIFT_EXPIRY_DAYS = 7;

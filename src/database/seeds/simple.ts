@@ -33,9 +33,9 @@ import {
 import { OperationalState } from '@models/operations/operational-state.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
-import { ensurePlatformAccessCatalog } from '@services/platform-bootstrap.service';
-import { hookIdFromPublicId, nextPublicIds, nextPublicId } from '@services/public-id.service';
-import { refreshNigerianLocationCatalog } from '@services/location-catalog.service';
+import { ensurePlatformAccessCatalog } from '@modules/platform/platform-bootstrap.service';
+import { hookIdFromPublicId, nextPublicIds, nextPublicId } from '@modules/platform/public-id.service';
+import { refreshNigerianLocationCatalog } from '@modules/catalog/location-catalog.service';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { productGallery, productOptions, MARKET_ASSOCIATE_PRODUCT_CATALOG } from './market-associate-product-catalog';
 
@@ -97,10 +97,6 @@ async function seedStates() {
     timezone: 'Africa/Lagos',
     currency: 'NGN',
     deliveryPromiseHours: 48,
-    payAtHubEnabled: false,
-    payAtHubLimitMinor: 10_000_000,
-    podEnabled: false,
-    podLimitMinor: 10_000_000,
   }));
   const states = await OperationState.insertMany(stateRows);
   await OperationalState.insertMany(NIGERIAN_STATES.map((state) => ({
@@ -331,7 +327,6 @@ async function seedNonStaffAccounts(adminId: string, markets: any[], password: s
     isActive: true,
     isEmailVerified: true,
     isPhoneVerified: true,
-    podEligible: true,
     passwordChangedAt: new Date(),
   });
 
@@ -591,7 +586,7 @@ async function seedCommerceDefaults(adminId: string) {
     await CommercePolicyVersion.create({ publicId: `POL-${type}-${version.replace('.', '-')}`, type, version, status: 'active', effectiveAt: new Date() });
     return [type, version];
   })));
-  await CommerceSettings.create({ key: 'commerce', currency: 'NGN', defaultDeliveryFeeMinor: 300_000, podEnabled: false, defaultPodLimitMinor: 10_000_000, previewTtlMinutes: 10, catalogAvailabilityCheckDays: 4, negotiationEnabled: true, negotiationSessionMode: 'fixed', negotiationSessionMinutes: 10, negotiationMaximumOffers: 3, negotiationQuoteMinutes: 30, negotiationAzureWordingEnabled: true, paymentProviders: [{ provider: 'paystack', enabled: true, displayOrder: 1, isDefault: true }, { provider: 'opay', enabled: false, displayOrder: 2, isDefault: false }], activePolicyVersions: policyVersions, updatedBy: adminId });
+  await CommerceSettings.create({ key: 'commerce', currency: 'NGN', defaultDeliveryFeeMinor: 300_000, previewTtlMinutes: 10, catalogAvailabilityCheckDays: 4, negotiationEnabled: true, negotiationSessionMode: 'fixed', negotiationSessionMinutes: 10, negotiationMaximumOffers: 3, negotiationQuoteMinutes: 30, negotiationAzureWordingEnabled: true, paymentProviders: [{ provider: 'paystack', enabled: true, displayOrder: 1, isDefault: true }], activePolicyVersions: policyVersions, updatedBy: adminId });
   await DeliveryPricingRule.create({
     publicId: await nextPublicId('deliveryRule'), name: 'Nigeria default delivery', scope: 'global', mode: 'flat', flatFeeMinor: 300_000, fallbackFeeMinor: 300_000, status: 'active', version: 1, createdBy: adminId,
   });

@@ -11,7 +11,6 @@ import { VendorFulfilment } from '@models/orders/vendor-fulfilment.model';
 import { EscrowLedger } from '@models/payments/escrow-ledger.model';
 import { BoothInventory } from '@models/booths/booth-inventory.model';
 import { AccountDeletionRequest } from '@models/support/account-deletion-request.model';
-import { CheckoutEvent } from '@models/analytics/checkout-event.model';
 import { OrderItem } from '@models/orders/order-item.model';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
@@ -39,7 +38,6 @@ export const adminRepos = {
   escrowLedger: () => new MongoRepository(EscrowLedger),
   boothInventory: () => new MongoRepository(BoothInventory, { product: () => adminRepos.products(), vendor: () => adminRepos.vendors(), booth: () => adminRepos.booths() }),
   deletionRequests: () => new MongoRepository(AccountDeletionRequest, { user: () => adminRepos.users() }),
-  checkoutEvents: () => new MongoRepository(CheckoutEvent),
   refundRequests: () => new MongoRepository(RefundRequest),
 };
 

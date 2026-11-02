@@ -1,16 +1,29 @@
 import { Request, Response } from 'express';
+import { publishConfigChanged } from '@modules/platform/realtime.service';
+import mongoose from 'mongoose';
 import { LegalContent } from '@models/platform/legal-content.model';
-import { recordAudit } from '@services/platform-audit.service';
+import { CommercePolicyVersion, CommerceSettings } from '@models/commerce/commerce.model';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { routeParam } from '@lib/api-utils';
 import { HttpError, sendSuccess } from '@utils/http';
+import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
 
 const DEFAULT_TITLES: Record<string, string> = {
   terms: 'Terms of Service',
   privacy: 'Privacy Policy',
+  returns: 'Returns Policy',
 };
 
-function assertType(type: string): asserts type is 'terms' | 'privacy' {
-  if (type !== 'terms' && type !== 'privacy') {
+type LegalSnapshot = {
+  title?: string;
+  bodyHtml?: string;
+  version?: number;
+  effectiveDate?: Date;
+  updatedAt?: Date;
+};
+
+function assertType(type: string): asserts type is 'terms' | 'privacy' | 'returns' {
+  if (type !== 'terms' && type !== 'privacy' && type !== 'returns') {
     throw new HttpError(404, 'Unknown legal document type', undefined, 'NOT_FOUND');
   }
 }
@@ -23,7 +36,7 @@ export class AdminLegalContentController {
     sendSuccess(res, {
       type,
       title: doc?.title || DEFAULT_TITLES[type],
-      bodyHtml: doc?.bodyHtml || '',
+      bodyHtml: doc?.bodyHtml || (type === 'returns' ? DEFAULT_RETURNS_POLICY_HTML : ''),
       version: doc?.version || 0,
       effectiveDate: doc?.effectiveDate || null,
       updatedAt: doc?.updatedAt || null,
@@ -33,35 +46,78 @@ export class AdminLegalContentController {
   update = async (req: Request, res: Response) => {
     const type = routeParam(req.params.type);
     assertType(type);
-    const existing = await LegalContent.findOne({ type }).lean();
-    const updated = await LegalContent.findOneAndUpdate(
-      { type },
-      {
-        $set: {
-          title: req.body.title || DEFAULT_TITLES[type],
-          bodyHtml: req.body.bodyHtml,
-          effectiveDate: req.body.effectiveDate ? new Date(req.body.effectiveDate) : new Date(),
-          version: (existing?.version || 0) + 1,
-          updatedBy: req.user!.sub,
-        },
-      },
-      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-    ).lean();
+    const session = await mongoose.startSession();
+    const snapshots: { existing: LegalSnapshot | null; updated: LegalSnapshot | null } = {
+      existing: null,
+      updated: null,
+    };
+    try {
+      await session.withTransaction(async () => {
+        snapshots.existing = await LegalContent.findOne({ type }).session(session).lean();
+        const version = (snapshots.existing?.version || 0) + 1;
+        const effectiveDate = req.body.effectiveDate ? new Date(req.body.effectiveDate) : new Date();
+        snapshots.updated = await LegalContent.findOneAndUpdate(
+          { type },
+          {
+            $set: {
+              title: req.body.title || DEFAULT_TITLES[type],
+              bodyHtml: req.body.bodyHtml,
+              effectiveDate,
+              version,
+              updatedBy: req.user!.sub,
+            },
+          },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session },
+        ).lean();
+
+        const commerceType = type.toUpperCase() as 'TERMS' | 'PRIVACY' | 'RETURNS';
+        await CommercePolicyVersion.updateMany(
+          { type: commerceType, status: 'active' },
+          { $set: { status: 'retired' } },
+          { session },
+        );
+        await CommercePolicyVersion.findOneAndUpdate(
+          { type: commerceType, version: String(version) },
+          {
+            $set: {
+              status: 'active',
+              effectiveAt: effectiveDate,
+              contentUrl: `/${type}`,
+            },
+            $setOnInsert: { publicId: `POL-${commerceType}-${version}` },
+          },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session },
+        );
+        await CommerceSettings.findOneAndUpdate(
+          { key: 'commerce' },
+          {
+            $set: {
+              [`activePolicyVersions.${commerceType}`]: String(version),
+              updatedBy: req.user!.sub,
+            },
+          },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, session },
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
     await recordAudit(req, {
       action: 'legal_content.update',
       entityType: 'legal_content',
       entityId: type,
-      before: existing || undefined,
-      after: updated || undefined,
+      before: snapshots.existing || undefined,
+      after: snapshots.updated || undefined,
       reason: req.body.reason,
     });
+    publishConfigChanged('legal');
     sendSuccess(res, {
       type,
-      title: updated?.title,
-      bodyHtml: updated?.bodyHtml,
-      version: updated?.version,
-      effectiveDate: updated?.effectiveDate,
-      updatedAt: updated?.updatedAt,
+      title: snapshots.updated?.title,
+      bodyHtml: snapshots.updated?.bodyHtml,
+      version: snapshots.updated?.version,
+      effectiveDate: snapshots.updated?.effectiveDate,
+      updatedAt: snapshots.updated?.updatedAt,
     });
   };
 }

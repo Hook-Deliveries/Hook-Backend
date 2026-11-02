@@ -8,6 +8,8 @@ export interface OrderFulfilmentGroup extends BaseEntity {
   orderItemIds: string[];
   subtotalMinor: number;
   vatShareMinor: number;
+  couponDiscountShareMinor?: number;
+  creditsAppliedShareMinor?: number;
   deliveryFeeShareMinor: number;
   status: "PENDING" | "IN_FULFILMENT" | "READY_FOR_DISPATCH" | "IN_TRANSIT" | "DELIVERED" | "COMPLETED" | "ON_HOLD";
   paymentId?: string;
@@ -23,6 +25,8 @@ const schema = createSchema<OrderFulfilmentGroup>({
   orderItemIds: { type: [String], default: [] },
   subtotalMinor: { type: Number, required: true, min: 0 },
   vatShareMinor: { type: Number, required: true, min: 0, default: 0 },
+  couponDiscountShareMinor: { type: Number, default: 0, min: 0 },
+  creditsAppliedShareMinor: { type: Number, default: 0, min: 0 },
   deliveryFeeShareMinor: { type: Number, required: true, min: 0 },
   status: {
     type: String,
@@ -36,7 +40,11 @@ const schema = createSchema<OrderFulfilmentGroup>({
   deletedAt: { type: Date },
 });
 
-schema.index({ orderId: 1, sourceStateId: 1 }, { unique: true });
+// Deliberately NOT unique. An order may have several groups in the same state
+// once an admin splits it into multiple deliveries; uniqueness on the group
+// itself is already enforced by publicId. This index exists only to make the
+// per-state lookups fast.
+schema.index({ orderId: 1, sourceStateId: 1 });
 
 export const OrderFulfilmentGroup = createModel<OrderFulfilmentGroup>(
   "OrderFulfilmentGroup",

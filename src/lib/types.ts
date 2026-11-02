@@ -1,6 +1,4 @@
-// ============================================================
 // Shared interfaces used across modules
-// ============================================================
 
 export interface JwtPayload {
   sub: string; // user_id

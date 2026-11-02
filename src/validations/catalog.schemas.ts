@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { ProductAvailabilityStatus } from '@lib/constants';
+import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
+import { productBaseSchema, validateNegotiationFloor } from './common.schemas';
 
 const publicOrInternalId = z.string().trim().min(3).max(80);
 const moneyMinor = z.coerce.number().int().positive().max(10_000_000_000);
@@ -18,7 +19,14 @@ export const marketAssociateSubmissionDraftSchema = z.object({
   categorySuggestionId: publicOrInternalId,
   basicTitle: z.string().trim().min(2).max(180),
   notes: z.string().trim().max(2000).optional(),
-  mediaIds: z.array(publicOrInternalId).max(12).default([]),
+  // Front, side and back are compulsory; up to four extra photos are optional.
+  mediaIds: z.array(publicOrInternalId).max(7).default([]),
+  mediaViews: z.object({
+    front: publicOrInternalId.optional(),
+    side: publicOrInternalId.optional(),
+    back: publicOrInternalId.optional(),
+  }).strict().default({}),
+  captureChecklistConfirmed: z.boolean().default(false),
   basePriceMinor: moneyMinor,
   currency: z.literal('NGN').default('NGN'),
   // No minimum here — this schema also covers draft save/update, and a
@@ -29,7 +37,17 @@ export const marketAssociateSubmissionDraftSchema = z.object({
   availabilityNote: z.string().trim().max(500).optional(),
   internalSellerReference: z.string().trim().max(300).optional(),
   version: z.coerce.number().int().positive().optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  for (const [view, mediaId] of Object.entries(value.mediaViews)) {
+    if (mediaId && !value.mediaIds.includes(mediaId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mediaViews", view],
+        message: "The assigned view must reference one of this submission's images",
+      });
+    }
+  }
+});
 
 export const reviewReasonSchema = z.object({
   reason: z.string().trim().min(5).max(1000),
@@ -41,29 +59,15 @@ export const reviewStartSchema = z.object({
   version: z.coerce.number().int().positive(),
 }).strict();
 
-export const commercialProductSchema = z.object({
-  title: z.string().trim().min(2).max(180).optional(),
-  slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(200).optional(),
-  description: z.string().trim().min(20).max(10_000).optional(),
-  categoryId: publicOrInternalId.optional(),
-  mediaAssetIds: z.array(publicOrInternalId).min(1).max(12).optional(),
-  customerAvailabilityNote: z.string().trim().max(500).optional(),
-  variantUpdates: z.array(variant.extend({ id: publicOrInternalId.optional() })).max(80).optional(),
+// Approving a submission now creates the live Product directly, in the same
+// shape Product Inventory's own "New Product" form submits — see
+// CatalogReviewService.decide()'s approve branch. `version` here guards the
+// ProductSubmission's optimistic concurrency, distinct from the Product's own
+// catalogVersion (which the create path always initializes fresh).
+export const submissionApproveAsProductSchema = productBaseSchema.extend({
+  status: z.enum([ProductStatus.DRAFT, ProductStatus.PUBLISHED]).default(ProductStatus.PUBLISHED),
   version: z.coerce.number().int().positive(),
-}).strict();
-
-export const pricingSchema = z.object({
-  basePriceMinor: moneyMinor,
-  sellingPriceMinor: moneyMinor,
-  discountMinor: z.coerce.number().int().nonnegative().max(10_000_000_000).default(0),
-  currency: z.literal('NGN').default('NGN'),
-  reason: z.string().trim().min(5).max(1000),
-  version: z.coerce.number().int().positive(),
-}).strict().superRefine((value, ctx) => {
-  if (value.discountMinor >= value.sellingPriceMinor) {
-    ctx.addIssue({ code: 'custom', path: ['discountMinor'], message: 'Discount must be lower than the selling price' });
-  }
-});
+}).superRefine(validateNegotiationFloor);
 
 export const negotiationRulesSchema = z.object({
   enabled: z.boolean(),

@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getPreferences, updatePreferences } from "@modules/notifications/notification-dispatch.service";
 import { AppDataSource } from "@config/data-source";
 import { CartItem } from "@models/cart/cart-item.model";
 import { Cart } from "@models/cart/cart.model";
@@ -8,26 +9,27 @@ import { Order } from "@models/orders/order.model";
 import { Payment } from "@models/payments/payment.model";
 import { EscrowLedger } from "@models/payments/escrow-ledger.model";
 import { Product } from "@models/products/product.model";
-import { User } from "@models/users/user.model";
 import { DeviceToken } from "@models/notifications/device-token.model";
 import { Notification } from "@models/notifications/notification.model";
 import { AccountDeletionRequest } from "@models/support/account-deletion-request.model";
-import { CheckoutEvent } from "@models/analytics/checkout-event.model";
-import { SavedPaymentMethod } from "@models/payments/saved-payment-method.model";
-import { CartService } from "@services/cart.service";
-import { NotificationService } from "@services/notification.service";
-import { OrderService } from "@services/order.service";
-import { PaymentService } from "@services/payment.service";
+import { CartService } from "@modules/orders/cart.service";
+import { NotificationService } from "@modules/notifications/notification.service";
+import { OrderService } from "@modules/orders/order.service";
+import { PaymentService } from "@modules/payments/payment.service";
 import { HttpError } from "@utils/http";
 import { routeParam } from "@lib/api-utils";
 import { sendCreated, sendSuccess } from "@utils/http";
 import { RefundRequest } from "@models/orders/refund-request.model";
 import { OrderStatus, PaymentStatus } from "@lib/constants";
 import { publicCart, publicOrder } from "@lib/public-resource";
-import { AddressService } from "@services/address.service";
-import { CheckoutService } from "@services/checkout.service";
+import { AddressService } from "@modules/identity/address.service";
+import { CheckoutService } from "@modules/orders/checkout.service";
 import { CommerceSettings } from "@models/commerce/commerce.model";
-import { CommerceImportService } from "@services/commerce-import.service";
+import { CommerceImportService } from "@modules/catalog/commerce-import.service";
+import { LogisticsProviderService } from "@modules/fulfilment/logistics-provider.service";
+import { CreditService } from "@modules/orders/credit.service";
+import { ReferralService } from "@modules/orders/referral.service";
+import { CouponService } from "@modules/orders/coupon.service";
 
 function owner(req: Request) {
   return { userId: req.user!.sub };
@@ -66,6 +68,10 @@ export class CustomerController {
   private readonly addresses = new AddressService();
   private readonly checkoutV4 = new CheckoutService();
   private readonly commerceImport = new CommerceImportService();
+  private readonly logisticsService = new LogisticsProviderService();
+  private readonly creditService = new CreditService();
+  private readonly referralService = new ReferralService();
+  private readonly couponService = new CouponService();
 
   importCommerce = async (req: Request, res: Response) =>
     sendSuccess(
@@ -207,16 +213,48 @@ export class CustomerController {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
       currency: settings?.currency || "NGN",
-      podEnabled: settings?.podEnabled || false,
+      vatRatePercent: settings?.vatRatePercent ?? 7.5,
       policyVersions: settings?.activePolicyVersions || {},
+      orderEarnEnabled: settings?.orderEarnEnabled ?? true,
+      orderEarnPercent: settings?.orderEarnPercent ?? 1,
+      orderEarnMaxMinor: settings?.orderEarnMaxMinor ?? 0,
+      minimumCheckoutMinor: settings?.minimumCheckoutMinor ?? 1800000,
     });
   };
 
-  checkout = async (req: Request, res: Response) => {
-    sendCreated(
-      res,
-      publicOrder(await this.orders.checkout(owner(req), req.body)),
-    );
+  logisticsProviders = async (_req: Request, res: Response) =>
+    sendSuccess(res, await this.logisticsService.listActive());
+
+  credits = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const [balanceMinor, history, capPercent] = await Promise.all([
+      this.creditService.balance(userId),
+      this.creditService.history(userId),
+      this.creditService.spendCapPercent(),
+    ]);
+    sendSuccess(res, { balanceMinor, capPercent, currency: "NGN", history });
+  };
+
+  referrals = async (req: Request, res: Response) =>
+    sendSuccess(res, await this.referralService.summary(req.user!.sub));
+
+  /** Lets the app show a coupon's worth before the customer commits to pay. */
+  validateCoupon = async (req: Request, res: Response) => {
+    const result = await this.couponService.validate(String(req.body.code), {
+      userId: req.user!.sub,
+      subtotalMinor: Number(req.body.subtotalMinor || 0),
+      deliveryFeeMinor: Number(req.body.deliveryFeeMinor || 0),
+    });
+    sendSuccess(res, {
+      code: result.code,
+      type: result.type,
+      discountMinor: result.discountMinor,
+      appliesToDelivery: result.appliesToDelivery,
+    });
+  };
+
+  pendingApprovals = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.orders.pendingApprovals(owner(req)));
   };
 
   listOrders = async (req: Request, res: Response) => {
@@ -272,79 +310,22 @@ export class CustomerController {
   };
 
   paymentMethodCapability = async (_req: Request, res: Response) => {
-    sendSuccess(res, this.payments.capability());
+    sendSuccess(res, await this.payments.capability());
   };
 
-  listPaymentMethods = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(
-        401,
-        "Register or sign in to view saved payment methods",
-      );
-    sendSuccess(
-      res,
-      await AppDataSource.getRepository(SavedPaymentMethod).find({
-        where: { userId: req.user.sub, isActive: true },
-        select: [
-          "id",
-          "provider",
-          "brand",
-          "last4",
-          "expiryDisplay",
-          "consentedAt",
-          "isDefault",
-          "createdAt",
-        ],
-      }),
-    );
-  };
+  notificationPreferences = async (req: Request, res: Response) =>
+    sendSuccess(res, await getPreferences(req.user!.sub));
 
-  savePaymentMethod = async (req: Request, res: Response) => {
-    if (process.env.OPAY_TOKENIZATION_ENABLED !== "true")
-      throw new HttpError(
-        409,
-        "Saved cards are not enabled for this merchant account",
-      );
-    if (!req.user?.sub)
-      throw new HttpError(401, "Register or sign in to save a payment method");
-    const repo = AppDataSource.getRepository(SavedPaymentMethod);
-    if (req.body.isDefault)
-      await repo.update({ userId: req.user.sub }, { isDefault: false });
-    const method = await repo.save(
-      repo.create({
-        ...req.body,
-        userId: req.user.sub,
-        provider: "opay",
-        consentedAt: new Date(),
-        isActive: true,
-      }),
-    );
-    sendCreated(res, {
-      id: method.id,
-      provider: method.provider,
-      brand: method.brand,
-      last4: method.last4,
-      expiryDisplay: method.expiryDisplay,
-      isDefault: method.isDefault,
-    });
-  };
+  updateNotificationPreferences = async (req: Request, res: Response) =>
+    sendSuccess(res, await updatePreferences(req.user!.sub, req.body));
 
-  removePaymentMethod = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(
-        401,
-        "Register or sign in to remove a payment method",
-      );
-    const repo = AppDataSource.getRepository(SavedPaymentMethod);
-    const method = await repo.findOne({
-      where: { id: routeParam(req.params.id), userId: req.user.sub },
-    });
-    if (!method) throw new HttpError(404, "Payment method not found");
-    await repo.update(method.id, {
-      isActive: false,
-      providerToken: `revoked:${method.id}`,
-    });
-    sendSuccess(res, { id: method.id, removed: true });
+  /** The customer tapped a push: record it so we know which notifications people act on. */
+  notificationOpened = async (req: Request, res: Response) => {
+    await Notification.updateOne(
+      { _id: routeParam(req.params.id), userId: req.user!.sub, openedAt: { $exists: false } },
+      { $set: { openedAt: new Date(), isRead: true, readAt: new Date() } },
+    ).catch(() => undefined);
+    sendSuccess(res, { opened: true });
   };
 
   listNotifications = async (req: Request, res: Response) => {
@@ -455,41 +436,5 @@ export class CustomerController {
     sendCreated(res, request);
   };
 
-  requestDeletion = async (req: Request, res: Response) => {
-    if (!req.user?.sub)
-      throw new HttpError(401, "A registered account is required");
-    const repo = AppDataSource.getRepository(AccountDeletionRequest);
-    const existing = await repo.findOne({
-      where: {
-        userId: req.user.sub,
-        status: { $nin: ["anonymized", "cancelled"] },
-      },
-    });
-    if (existing) return sendSuccess(res, existing);
-    const request = await repo.save(
-      repo.create({
-        userId: req.user.sub,
-        reason: req.body.reason,
-        status: "requested",
-        coolingOffUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      }),
-    );
-    await AppDataSource.getRepository(User).update(req.user.sub, {
-      accountStatus: "deletion_requested",
-    });
-    sendCreated(res, request);
-  };
 
-  recordCheckoutEvent = async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(CheckoutEvent);
-    sendCreated(
-      res,
-      await repo.save(
-        repo.create({
-          ...req.body,
-          userId: req.user!.sub,
-        }),
-      ),
-    );
-  };
 }

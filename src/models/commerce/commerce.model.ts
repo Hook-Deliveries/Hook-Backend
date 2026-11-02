@@ -39,7 +39,7 @@ export interface CheckoutPreview extends BaseEntity {
   cartVersion: number;
   channel: "SHOPPER_APP" | "PARTNER_ASSISTED";
   deliveryMethod: "HOME_DELIVERY" | "PARTNER_PICKUP";
-  paymentMethod: "PREPAID" | "PAY_AT_HANDOVER";
+  paymentMethod: "PREPAID";
   addressId?: string;
   addressSnapshot?: Record<string, unknown>;
   pickupPartnerSnapshot?: Record<string, unknown>;
@@ -50,10 +50,16 @@ export interface CheckoutPreview extends BaseEntity {
   taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor: number;
   deliveryPricing?: Record<string, unknown>;
+  logisticsProviderId?: string;
+  logisticsProviderSnapshot?: Record<string, unknown>;
+  couponId?: string;
+  couponCode?: string;
+  deliveryNote?: string;
+  couponDiscountMinor: number;
+  creditsAppliedMinor: number;
   totalMinor: number;
   currency: string;
   policyVersions: Record<string, string>;
-  podDecision: Record<string, unknown>;
   expiresAt: Date;
   consumedAt?: Date;
   orderId?: string;
@@ -63,10 +69,19 @@ export interface CommerceSettings extends BaseEntity {
   key: "commerce";
   currency: string;
   defaultDeliveryFeeMinor: number;
-  podEnabled: boolean;
-  defaultPodLimitMinor: number;
   previewTtlMinutes: number;
   catalogAvailabilityCheckDays: number;
+  /** Ceiling on how much of one order's subtotal Hook credit may cover. */
+  creditSpendCapPercent: number;
+  /** Credits granted to every new customer account. */
+  welcomeBonusMinor: number;
+  /** Share of an order's subtotal returned as Hook credit once it is paid. */
+  orderEarnPercent: number;
+  /** Optional ceiling on a single order's earn. 0 means no cap. */
+  orderEarnMaxMinor: number;
+  orderEarnEnabled: boolean;
+  referralSignupBonusMinor: number;
+  referralReferrerBonusMinor: number;
   negotiationEnabled: boolean;
   negotiationSessionMode: "fixed" | "unlimited";
   negotiationSessionMinutes: number;
@@ -74,12 +89,17 @@ export interface CommerceSettings extends BaseEntity {
   negotiationQuoteMinutes: number;
   negotiationAzureWordingEnabled: boolean;
   paymentProviders: Array<{
-    provider: "paystack" | "opay";
+    provider: "paystack" | "monnify";
     enabled: boolean;
     displayOrder: number;
     isDefault: boolean;
   }>;
   lowStockThreshold: number;
+  /** Smallest cart subtotal (kobo) that may be checked out. Smaller carts can be saved but not bought. */
+  minimumCheckoutMinor: number;
+  /** Kobo when flat, percent of the subtotal when percent. */
+  /** VAT charged on products, as a percent. */
+  vatRatePercent: number;
   activePolicyVersions: Record<string, string>;
   updatedBy?: string;
 }
@@ -94,7 +114,7 @@ export interface CommercePolicyVersion extends BaseEntity {
 }
 
 export interface PaymentWebhookEvent extends BaseEntity {
-  provider: "paystack" | "opay";
+  provider: "paystack" | "monnify";
   providerEventId: string;
   payloadHash: string;
   eventType: string;
@@ -105,24 +125,9 @@ export interface PaymentWebhookEvent extends BaseEntity {
   failureCode?: string;
 }
 
-export interface CommerceOutboxEvent extends BaseEntity {
-  publicId: string;
-  aggregateType: "order";
-  aggregateId: string;
-  eventType: "ORDER_APPROVED_FOR_FULFILMENT";
-  eventVersion: number;
-  payload: Record<string, unknown>;
-  status: "pending" | "processing" | "published" | "dead_letter";
-  attempts: number;
-  availableAt: Date;
-  processedAt?: Date;
-  lastError?: string;
-  lockedUntil?: Date;
-  lockToken?: string;
-}
 
 export interface IntegrationException extends BaseEntity {
-  provider: "paystack" | "opay";
+  provider: "paystack" | "monnify";
   type:
     | "signature"
     | "reference"
@@ -139,22 +144,6 @@ export interface IntegrationException extends BaseEntity {
   status: "open" | "resolved" | "ignored";
   resolvedBy?: string;
   resolvedAt?: Date;
-}
-
-export interface PodCallRecord extends BaseEntity {
-  orderId: string;
-  outcome: "CONFIRMED" | "NO_ANSWER" | "DECLINED" | "INVALID_CONTACT";
-  notes?: string;
-  actorId: string;
-  calledAt: Date;
-}
-
-export interface PodOverride extends BaseEntity {
-  orderId: string;
-  reason: string;
-  actorId: string;
-  approvedAt: Date;
-  amountMinor: number;
 }
 
 const addressSchema = createSchema<CustomerAddress>({
@@ -213,7 +202,7 @@ const previewSchema = createSchema<CheckoutPreview>({
   },
   paymentMethod: {
     type: String,
-    enum: ["PREPAID", "PAY_AT_HANDOVER"],
+    enum: ["PREPAID"],
     required: true,
   },
   addressId: { type: String },
@@ -226,10 +215,16 @@ const previewSchema = createSchema<CheckoutPreview>({
   taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, required: true, min: 0 },
   deliveryPricing: { type: Object },
+  logisticsProviderId: { type: String },
+  logisticsProviderSnapshot: { type: Object },
+  couponId: { type: String },
+  couponCode: { type: String, uppercase: true },
+  deliveryNote: { type: String, maxlength: 300 },
+  couponDiscountMinor: { type: Number, default: 0, min: 0 },
+  creditsAppliedMinor: { type: Number, default: 0, min: 0 },
   totalMinor: { type: Number, required: true, min: 0 },
   currency: { type: String, default: "NGN" },
   policyVersions: { type: Object, required: true },
-  podDecision: { type: Object, default: {} },
   expiresAt: { type: Date, required: true },
   consumedAt: { type: Date },
   orderId: { type: String, index: true },
@@ -241,10 +236,15 @@ const settingsSchema = createSchema<CommerceSettings>({
   key: { type: String, enum: ["commerce"], unique: true, default: "commerce" },
   currency: { type: String, default: "NGN" },
   defaultDeliveryFeeMinor: { type: Number, default: 300000, min: 0 },
-  podEnabled: { type: Boolean, default: false },
-  defaultPodLimitMinor: { type: Number, default: 10000000, min: 0 },
   previewTtlMinutes: { type: Number, default: 10, min: 2, max: 30 },
   catalogAvailabilityCheckDays: { type: Number, default: 4, min: 1, max: 30 },
+  creditSpendCapPercent: { type: Number, default: 20, min: 0, max: 100 },
+  welcomeBonusMinor: { type: Number, default: 30000, min: 0 },
+  orderEarnPercent: { type: Number, default: 1, min: 0, max: 100 },
+  orderEarnMaxMinor: { type: Number, default: 0, min: 0 },
+  orderEarnEnabled: { type: Boolean, default: true },
+  referralSignupBonusMinor: { type: Number, default: 30000, min: 0 },
+  referralReferrerBonusMinor: { type: Number, default: 100000, min: 0 },
   negotiationEnabled: { type: Boolean, default: true },
   negotiationSessionMode: { type: String, enum: ["fixed", "unlimited"], default: "fixed" },
   negotiationSessionMinutes: { type: Number, default: 10, min: 1, max: 1440 },
@@ -255,10 +255,11 @@ const settingsSchema = createSchema<CommerceSettings>({
     type: [Object],
     default: [
       { provider: "paystack", enabled: true, displayOrder: 1, isDefault: true },
-      { provider: "opay", enabled: false, displayOrder: 2, isDefault: false },
     ],
   },
   lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
+  minimumCheckoutMinor: { type: Number, default: 1800000, min: 0 },
+  vatRatePercent: { type: Number, default: 7.5, min: 0, max: 30 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },
   deletedAt: { type: Date },
@@ -284,7 +285,7 @@ const policySchema = createSchema<CommercePolicyVersion>({
 });
 policySchema.index({ type: 1, version: 1 }, { unique: true });
 const webhookSchema = createSchema<PaymentWebhookEvent>({
-  provider: { type: String, enum: ["paystack", "opay"], required: true },
+  provider: { type: String, enum: ["paystack", "monnify"], required: true },
   providerEventId: { type: String, required: true },
   payloadHash: { type: String, required: true },
   eventType: { type: String, required: true },
@@ -300,37 +301,8 @@ const webhookSchema = createSchema<PaymentWebhookEvent>({
   deletedAt: { type: Date },
 });
 webhookSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
-const outboxSchema = createSchema<CommerceOutboxEvent>({
-  publicId: { type: String, required: true, unique: true, index: true },
-  aggregateType: { type: String, enum: ["order"], default: "order" },
-  aggregateId: { type: String, required: true, index: true },
-  eventType: {
-    type: String,
-    enum: ["ORDER_APPROVED_FOR_FULFILMENT"],
-    required: true,
-  },
-  eventVersion: { type: Number, default: 1 },
-  payload: { type: Object, required: true },
-  status: {
-    type: String,
-    enum: ["pending", "processing", "published", "dead_letter"],
-    default: "pending",
-    index: true,
-  },
-  attempts: { type: Number, default: 0 },
-  availableAt: { type: Date, default: Date.now, index: true },
-  processedAt: { type: Date },
-  lastError: { type: String, maxlength: 1000 },
-  lockedUntil: { type: Date, index: true },
-  lockToken: { type: String, index: true, sparse: true },
-  deletedAt: { type: Date },
-});
-outboxSchema.index(
-  { aggregateId: 1, eventType: 1, eventVersion: 1 },
-  { unique: true },
-);
 const exceptionSchema = createSchema<IntegrationException>({
-  provider: { type: String, enum: ["paystack", "opay"], default: "paystack" },
+  provider: { type: String, enum: ["paystack", "monnify"], default: "paystack" },
   type: {
     type: String,
     enum: [
@@ -359,27 +331,11 @@ const exceptionSchema = createSchema<IntegrationException>({
   resolvedAt: { type: Date },
   deletedAt: { type: Date },
 });
-const podCallSchema = createSchema<PodCallRecord>({
-  orderId: { type: String, required: true, index: true },
-  outcome: {
-    type: String,
-    enum: ["CONFIRMED", "NO_ANSWER", "DECLINED", "INVALID_CONTACT"],
-    required: true,
-  },
-  notes: { type: String, maxlength: 1000 },
-  actorId: { type: String, required: true },
-  calledAt: { type: Date, default: Date.now },
-  deletedAt: { type: Date },
-});
-const podOverrideSchema = createSchema<PodOverride>({
-  orderId: { type: String, required: true, unique: true, index: true },
-  reason: { type: String, required: true, maxlength: 1000 },
-  actorId: { type: String, required: true },
-  approvedAt: { type: Date, default: Date.now },
-  amountMinor: { type: Number, required: true, min: 0 },
-  deletedAt: { type: Date },
-});
-
+// One open exception per (provider, reference, type), so retried webhooks don't add a fresh row each attempt; resolved rows are exempt.
+exceptionSchema.index(
+  { provider: 1, reference: 1, type: 1 },
+  { unique: true, partialFilterExpression: { status: "open", reference: { $type: "string" } } },
+);
 export const CustomerAddress = createModel<CustomerAddress>(
   "CustomerAddress",
   addressSchema,
@@ -400,19 +356,7 @@ export const PaymentWebhookEvent = createModel<PaymentWebhookEvent>(
   "PaymentWebhookEvent",
   webhookSchema,
 );
-export const CommerceOutboxEvent = createModel<CommerceOutboxEvent>(
-  "CommerceOutboxEvent",
-  outboxSchema,
-);
 export const IntegrationException = createModel<IntegrationException>(
   "IntegrationException",
   exceptionSchema,
-);
-export const PodCallRecord = createModel<PodCallRecord>(
-  "PodCallRecord",
-  podCallSchema,
-);
-export const PodOverride = createModel<PodOverride>(
-  "PodOverride",
-  podOverrideSchema,
 );

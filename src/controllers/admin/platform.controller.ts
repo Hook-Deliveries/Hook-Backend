@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { announce } from '@modules/notifications/engagement-notifications.service';
 import { isValidObjectId, Model } from 'mongoose';
 import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants';
 import { getPagination, paginated, routeParam } from '@lib/api-utils';
@@ -15,15 +16,20 @@ import {
   StaffProfile,
 } from '@models/platform/operations-accounts.model';
 import { User } from '@models/users/user.model';
-import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@services/access-control.service';
-import { revokeAccountSessions } from '@services/account-session.service';
-import { recordAudit } from '@services/platform-audit.service';
-import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@services/public-id.service';
-import { issueAccountInvitation, revokeAccountInvitations } from '@services/account-invitation.service';
-import { presentMarketRecords, presentPlatformRecords } from '@services/platform-presentation.service';
-import { publishRealtime } from '@services/realtime.service';
-import { MarketVendorService } from '@services/market-vendor.service';
-import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { assertPermission, assertScope, resolveAccessContext, scopedFilter } from '@modules/identity/access-control.service';
+import { revokeAccountSessions } from '@modules/identity/account-session.service';
+import { clearStaleInvitationFor, purgeUnacceptedAccount } from '@modules/identity/stale-invitation.service';
+import { FulfilmentTask, PartnerCustody } from '@models/fulfilment/fulfilment.model';
+import { Order } from '@models/orders/order.model';
+import { ProductSubmission } from '@models/catalog/catalog.model';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { nextPublicId, repairPublicIdCounter, PublicIdDomain } from '@modules/platform/public-id.service';
+import { issueAccountInvitation, revokeAccountInvitations } from '@modules/identity/account-invitation.service';
+import { presentHubRecords, presentMarketRecords, presentPlatformRecords } from '@modules/platform/platform-presentation.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
+import { MarketVendorService } from '@modules/catalog/market-vendor.service';
+import { createCommerceNotification } from '@modules/notifications/commerce-notification.service';
+import { isDuplicateKeyError, HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminAccessCatalogCache, adminStaffCache } from '@lib/ttl-cache';
 
 async function byIdentifier<T>(model: Model<T>, identifier: string) {
@@ -36,8 +42,11 @@ async function byIdentifier<T>(model: Model<T>, identifier: string) {
 }
 
 async function stateAndHub(req: Request) {
-  const requestedStateValue = req.platformContext?.stateId || (req.query.stateId as string | undefined);
-  const requestedHubValue = req.platformContext?.hubId || (req.query.hubId as string | undefined);
+  // An explicit filter on the request wins over the top-bar scope picker, so "All states" doesn't return every hub.
+  const queryState = (req.query.stateId as string | undefined)?.trim();
+  const queryHub = (req.query.hubId as string | undefined)?.trim();
+  const requestedStateValue = queryState || req.platformContext?.stateId;
+  const requestedHubValue = queryHub || req.platformContext?.hubId;
   const requestedState = requestedStateValue?.trim().toLowerCase() === 'all' ? undefined : requestedStateValue;
   const requestedHub = requestedHubValue?.trim().toLowerCase() === 'all' ? undefined : requestedHubValue;
   const state = requestedState ? await byIdentifier(OperationState, requestedState) : undefined;
@@ -69,6 +78,8 @@ async function listScoped<T>(
   model: Model<T>,
   permission: string,
   extra: Record<string, unknown> = {},
+  // Entities whose UI needs resolved names (hubs) pass a richer presenter; everything else keeps the id-only default.
+  present: (records: any) => Promise<any> = presentPlatformRecords,
 ) {
   const context = await access(req, permission);
   const { stateId, hubId } = await stateAndHub(req);
@@ -78,7 +89,7 @@ async function listScoped<T>(
     model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
     model.countDocuments(filter),
   ]);
-  return paginated(await presentPlatformRecords(data), total, page, limit);
+  return paginated(await present(data), total, page, limit);
 }
 
 async function detailScoped<T>(
@@ -86,12 +97,13 @@ async function detailScoped<T>(
   model: Model<T>,
   permission: string,
   identifier = routeParam(req.params.id),
+  present: (records: any) => Promise<any> = presentPlatformRecords,
 ) {
   const context = await access(req, permission);
   const record = await byIdentifier(model, identifier);
   const scopedRecord = record as Record<string, any>;
   assertScope(context, scopedRecord.stateId, scopedRecord.hubId || scopedRecord.preferredHubId);
-  return presentPlatformRecords(record);
+  return present(record);
 }
 
 async function sendPlatformSuccess(res: Response, value: any) {
@@ -442,6 +454,9 @@ export class PlatformController {
 
     if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
       filter.status = requestedStatus;
+    } else {
+      // Archived accounts live in their own tab and stay out of the everyday list.
+      filter.status = { $ne: AccountStatus.DISABLED };
     }
     if (requestedScope && Object.values(ScopeType).includes(requestedScope as ScopeType)) {
       filter.scopeType = requestedScope;
@@ -630,6 +645,9 @@ export class PlatformController {
     }
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
+    await clearStaleInvitationFor(req.body.email, req.body.phone);
+    if (await User.exists({ email: String(req.body.email).trim().toLowerCase() })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
+    if (req.body.phone && await User.exists({ phone: req.body.phone })) throw new HttpError(409, 'An account with this phone number already exists', { field: 'phone' }, 'CONFLICT');
     const publicId = await nextPublicId('staff');
     const account = await User.create({
       publicId,
@@ -814,22 +832,19 @@ export class PlatformController {
     if (profile.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending staff invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
-    const revokedInvitations = await revokeAccountInvitations(profile.accountId);
-    await Promise.all([
-      StaffProfile.updateOne({ _id: profile._id }, { $set: { status: AccountStatus.DISABLED } }),
-      User.updateOne({ _id: profile.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
-    ]);
+    // A cancelled invitation leaves nothing behind: the account is removed so the email can be used again.
     await recordAudit(req, {
       action: 'staff.invitation_cancelled',
       entityType: 'staff',
       entityId: profile._id.toString(),
       entityPublicId: profile.publicId,
       before: { status: profile.status },
-      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      after: { removed: true },
       reason: req.body.reason,
     });
+    if (!(await purgeUnacceptedAccount(String(profile.accountId)))) throw new HttpError(409, 'This account has already signed in, so it cannot be removed by cancelling the invitation. Archive it instead.', undefined, 'CONFLICT');
     adminStaffCache.clear();
-    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
+    sendSuccess(res, { removed: true });
   };
 
   listStates = async (req: Request, res: Response) => {
@@ -952,7 +967,15 @@ export class PlatformController {
       Market.find(filter).sort({ isFeatured: -1, displayPriority: 1, name: 1 }).skip(skip).limit(limit).lean({ virtuals: true }),
       Market.countDocuments(filter),
     ]);
-    sendSuccess(res, paginated(await presentMarketRecords(data), total, page, limit));
+    // How many Market Associates work each Market, so the directory can flag the ones nobody covers.
+    const ids = (data as any[]).map((market) => String(market._id));
+    const counts = ids.length
+      ? await MarketAssociateMarketAssignment.aggregate([{ $match: { marketId: { $in: ids }, status: 'active' } }, { $group: { _id: '$marketId', count: { $sum: 1 } } }])
+      : [];
+    const countByMarket = new Map((counts as any[]).map((row) => [String(row._id), row.count]));
+    const presented = (await presentMarketRecords(data)) as any[];
+    const withCounts = presented.map((market, index) => ({ ...market, associateCount: countByMarket.get(ids[index]) || 0 }));
+    sendSuccess(res, paginated(withCounts, total, page, limit));
   };
   marketDetail = async (req: Request, res: Response) => {
     const context = await access(req, 'markets.view');
@@ -964,6 +987,7 @@ export class PlatformController {
       vendors: detail.vendors,
       assignments: detail.assignments,
       marketAssociates: detail.marketAssociates,
+      associates: detail.associates,
       submissions: detail.submissions,
       products: detail.products,
       collections: detail.collections,
@@ -986,6 +1010,13 @@ export class PlatformController {
     });
     await recordAudit(req, { action: 'market.created', entityType: 'market', entityId: market.id, entityPublicId: market.publicId, stateId: market.stateId, hubId: market.hubId, after: market.toObject() });
     publishMarketUpdate(market);
+    // Tell customers in that State a new market is on Hook. Background, best effort.
+    if (market.status === 'active') {
+      void (async () => {
+        const state: any = await OperationState.findById(market.stateId).select('publicId name').lean();
+        await announce('new_market', market.publicId || market.id, { marketName: market.name, stateName: state?.name }, { stateId: state?.publicId, data: { marketId: market.publicId } });
+      })().catch(() => undefined);
+    }
     await sendPlatformCreated(res, market.toObject());
   };
   updateMarket = async (req: Request, res: Response) => {
@@ -1026,8 +1057,8 @@ export class PlatformController {
     await sendPlatformSuccess(res, updated);
   };
 
-  listHubs = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, DispatchHub, 'hubs.view'));
-  hubDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, DispatchHub, 'hubs.view'));
+  listHubs = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, DispatchHub, 'hubs.view', {}, presentHubRecords));
+  hubDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, DispatchHub, 'hubs.view', undefined, presentHubRecords));
   createHub = async (req: Request, res: Response) => {
     const context = await access(req, 'hubs.manage');
     const location = await resolveLocation(req.body);
@@ -1058,21 +1089,22 @@ export class PlatformController {
       cityId: req.body.cityId || hub.cityId,
     });
     assertScope(context, location.ids.stateId, hub._id.toString());
-    const zoneIds = req.body.zoneIds
+    // `!== undefined`, not truthiness: an empty array must clear the hub's links, not be treated as "omitted".
+    const zoneIds = req.body.zoneIds !== undefined
       ? await resolveIdentifiers(ServiceZone, req.body.zoneIds)
       : hub.zoneIds;
     const zones = await ServiceZone.find({ _id: { $in: zoneIds } }).lean();
     if (zones.some((zone) => zone.stateId !== location.ids.stateId || zone.cityId !== location.ids.cityId)) {
       throw new HttpError(409, 'Every Service Zone must belong to the Dispatch Hub City and State', undefined, 'CONFLICT');
     }
-    const marketIds = req.body.marketIds
+    const marketIds = req.body.marketIds !== undefined
       ? await resolveIdentifiers(Market, req.body.marketIds)
       : hub.marketIds;
     const markets = await Market.find({ _id: { $in: marketIds } }).lean();
     if (markets.some((market) => market.stateId !== location.ids.stateId)) {
       throw new HttpError(409, 'Every Market must belong to the Dispatch Hub state', undefined, 'CONFLICT');
     }
-    const staffIds = req.body.staffIds
+    const staffIds = req.body.staffIds !== undefined
       ? await resolveIdentifiers(StaffProfile, req.body.staffIds)
       : hub.staffIds;
     const updated = await DispatchHub.findByIdAndUpdate(
@@ -1100,12 +1132,105 @@ export class PlatformController {
     await sendPlatformSuccess(res, { marketIds });
   };
 
-  listPartners = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, HookPartner, 'partners.view'));
-  partnerDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, HookPartner, 'partners.view'));
+  listPartners = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.view');
+    const { stateId } = await stateAndHub(req);
+    const { page, limit, skip } = getPagination(req.query);
+    const requestedStatus = String(req.query.status || '').trim().toLowerCase();
+    const search = String(req.query.q || req.query.search || '').trim();
+    const filter: Record<string, unknown> = scopedFilter(context, {}, stateId, undefined);
+    if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
+      filter.status = requestedStatus;
+    } else {
+      filter.status = { $ne: AccountStatus.DISABLED };
+    }
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const accounts = await User.find({
+        $or: [
+          { email: { $regex: escaped, $options: 'i' } },
+          { firstName: { $regex: escaped, $options: 'i' } },
+          { lastName: { $regex: escaped, $options: 'i' } },
+          { phone: { $regex: escaped, $options: 'i' } },
+        ],
+      }).select('_id').lean();
+      filter.$or = [
+        { accountId: { $in: accounts.map((account) => account._id.toString()) } },
+        { name: { $regex: escaped, $options: 'i' } },
+      ];
+    }
+    const [data, total] = await Promise.all([
+      HookPartner.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean({ virtuals: true }),
+      HookPartner.countDocuments(filter),
+    ]);
+    const accountIds = data.map((partner) => partner.accountId).filter(Boolean).map((id) => id.toString());
+    const accounts = await User.find({ _id: { $in: accountIds } }).select('publicId email firstName lastName phone accountType accountStatus isActive isEmailVerified lastLoginAt').lean();
+    const accountMap = new Map(accounts.map((account) => [account._id.toString(), account]));
+    const presented = await presentPlatformRecords(data);
+    const rows = (presented as any[]).map((partner, index) => {
+      const source = data[index] as any;
+      const account = accountMap.get(source.accountId?.toString());
+      return {
+        ...partner,
+        firstName: account?.firstName || '',
+        lastName: account?.lastName || '',
+        email: account?.email || '',
+        phone: account?.phone || partner.phone || '',
+        account: account ? {
+          id: account.publicId || account._id.toString(),
+          publicId: account.publicId,
+          email: account.email,
+          firstName: account.firstName,
+          lastName: account.lastName,
+          phone: account.phone,
+          accountType: account.accountType,
+          accountStatus: account.accountStatus,
+          isActive: account.isActive,
+          isEmailVerified: account.isEmailVerified,
+          lastLoginAt: account.lastLoginAt,
+        } : null,
+        lastLoginAt: account?.lastLoginAt,
+      };
+    });
+    sendSuccess(res, paginated(rows, total, page, limit));
+  };
+
+  partnerDetail = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.view');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
+    const [account, presented] = await Promise.all([
+      User.findById(partner.accountId).select('-password -refreshToken').lean({ virtuals: true }),
+      presentPlatformRecords(partner),
+    ]);
+    sendSuccess(res, {
+      ...presented,
+      account: account ? {
+        id: account.publicId || account._id.toString(),
+        publicId: account.publicId,
+        email: account.email,
+        firstName: account.firstName,
+        lastName: account.lastName,
+        phone: account.phone,
+        accountType: account.accountType,
+        accountStatus: account.accountStatus,
+        isActive: account.isActive,
+        isEmailVerified: account.isEmailVerified,
+        lastLoginAt: account.lastLoginAt,
+        createdAt: account.createdAt,
+      } : null,
+    });
+  };
   createPartner = async (req: Request, res: Response) => {
     const context = await access(req, 'partners.manage');
     const location = await resolveLocation(req.body);
     assertScope(context, location.ids.stateId);
+    if (req.body.marketId) {
+      const market = await byIdentifier(Market, req.body.marketId);
+      if (market.stateId !== location.ids.stateId || market.cityId !== location.ids.cityId) {
+        throw new HttpError(409, 'The selected Market is not in the chosen State and City', undefined, 'CONFLICT');
+      }
+    }
     const publicId = await nextPublicId('partner');
     const account = await User.create({
       publicId, accountType: AccountType.PARTNER, accountStatus: AccountStatus.INVITED,
@@ -1159,6 +1284,14 @@ export class PlatformController {
       status === 'active' ? Promise.resolve() : revokeAccountSessions(partner.accountId, 'partner_suspended', req.user!.sub),
     ]);
     await recordAudit(req, { action: `partner.${status}`, entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:${status}:${Date.now()}`,
+      userId: partner.accountId,
+      title: status === 'active' ? 'Your Partner account is active again' : 'Your Partner account was suspended',
+      body: status === 'active' ? 'You can sign in and resume taking custody of orders.' : String(req.body.reason || 'Contact Hook support for more information.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status });
   };
 
@@ -1206,6 +1339,131 @@ export class PlatformController {
     sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
   };
 
+  /** Archives a Hook Partner. Refused while a custody handover is still open, since that would strand it. */
+  archivePartner = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
+    if (partner.status === AccountStatus.DISABLED) throw new HttpError(409, 'This Partner is already archived', undefined, 'CONFLICT');
+    const openCustody = await PartnerCustody.countDocuments({ partnerId: partner._id.toString(), status: { $nin: ['RELEASED'] } });
+    if (openCustody > 0) throw new HttpError(409, `${openCustody} order${openCustody === 1 ? ' is' : 's are'} still in custody at this Partner. Release ${openCustody === 1 ? 'it' : 'them'} first.`, { openCustody }, 'CONFLICT');
+    const now = new Date();
+    await Promise.all([
+      HookPartner.updateOne({ _id: partner._id }, { $set: { status: AccountStatus.DISABLED, deletedAt: now } }),
+      User.updateOne({ _id: partner.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false, deletedAt: now } }),
+      revokeAccountSessions(partner.accountId, 'partner_archived', req.user!.sub),
+      revokeAccountInvitations(partner.accountId),
+    ]);
+    await recordAudit(req, { action: 'partner.archived', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status: AccountStatus.DISABLED }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:archived:${Date.now()}`,
+      userId: partner.accountId,
+      title: 'Your Partner account was archived',
+      body: String(req.body.reason || 'Contact Hook support if you believe this is a mistake.'),
+      type: 'account_activated',
+      data: {},
+    });
+    sendSuccess(res, { status: AccountStatus.DISABLED });
+  };
+
+  /** Brings an archived Hook Partner back. */
+  restorePartner = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
+    if (partner.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Only archived Partners can be restored', undefined, 'INVALID_STATE_TRANSITION');
+    await Promise.all([
+      HookPartner.updateOne({ _id: partner._id }, { $set: { status: AccountStatus.ACTIVE }, $unset: { deletedAt: 1 } }),
+      User.updateOne({ _id: partner.accountId }, { $set: { accountStatus: AccountStatus.ACTIVE, isActive: true }, $unset: { deletedAt: 1 } }),
+    ]);
+    await recordAudit(req, { action: 'partner.restored', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, stateId: partner.stateId, before: { status: partner.status }, after: { status: AccountStatus.ACTIVE }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `partner:${partner.publicId}:restored:${Date.now()}`,
+      userId: partner.accountId,
+      title: 'Your Partner account was restored',
+      body: 'You can sign in and resume operating as a Hook Partner.',
+      type: 'account_activated',
+      data: {},
+    });
+    sendSuccess(res, { status: AccountStatus.ACTIVE });
+  };
+
+  revokePartnerSessions = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
+    await revokeAccountSessions(partner.accountId, req.body.reason || 'administrative_revocation', req.user!.sub);
+    await recordAudit(req, { action: 'partner.sessions_revoked', entityType: 'partner', entityId: partner._id.toString(), entityPublicId: partner.publicId, reason: req.body.reason });
+    sendSuccess(res, { revoked: true });
+  };
+
+  /** Permanently deletes an ARCHIVED Hook Partner; refused if the location has order or custody history, which would be left pointing at nobody. */
+  deletePartner = async (req: Request, res: Response) => {
+    const context = await access(req, 'partners.manage');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    assertScope(context, partner.stateId);
+    if (partner.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Archive this Partner before deleting it', undefined, 'INVALID_STATE_TRANSITION');
+    const expected = `DELETE ${partner.publicId}`;
+    if (String(req.body?.confirmation || '').trim() !== expected) throw new HttpError(400, `Type "${expected}" exactly to confirm`, undefined, 'VALIDATION_ERROR');
+    const id = partner._id.toString();
+    const [orders, custody] = await Promise.all([Order.exists({ initiatingPartnerId: id }), PartnerCustody.exists({ partnerId: id })]);
+    if (orders || custody) throw new HttpError(409, 'This location has order or custody history, so deleting it would orphan those records. Keep it archived.', undefined, 'CONFLICT');
+    await recordAudit(req, { action: 'partner.deleted', entityType: 'partner', entityId: id, entityPublicId: partner.publicId, before: { status: partner.status }, reason: req.body.reason });
+    await revokeAccountSessions(partner.accountId, 'partner_deleted', req.user!.sub);
+    await Promise.all([
+      HookPartner.deleteOne({ _id: partner._id }),
+      User.deleteOne({ _id: partner.accountId }),
+    ]);
+    sendSuccess(res, { deleted: true });
+  };
+
+  /** Per-Partner performance (orders, revenue, customer accounts) bucketed by today/week/month/all-time, so the detail page shows trend without a separate reports pipeline. */
+  partnerAnalytics = async (req: Request, res: Response) => {
+    await access(req, 'partners.view');
+    const partner = await byIdentifier(HookPartner, routeParam(req.params.id));
+    const partnerId = partner._id.toString();
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfDay); startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    async function bucket(since?: Date) {
+      const match: Record<string, unknown> = { initiatingPartnerId: partnerId, paymentStatus: 'paid' };
+      if (since) match.createdAt = { $gte: since };
+      const [result] = await Order.aggregate([
+        { $match: match },
+        { $group: { _id: null, orders: { $sum: 1 }, revenueMinor: { $sum: { $ifNull: ['$totalMinor', 0] } } } },
+      ]);
+      return { orders: result?.orders || 0, revenueMinor: result?.revenueMinor || 0 };
+    }
+
+    async function customersSince(since?: Date) {
+      const match: Record<string, unknown> = { accountType: AccountType.CUSTOMER, 'preferences.partnerAttestation.partnerId': partnerId };
+      if (since) match.createdAt = { $gte: since };
+      return User.countDocuments(match);
+    }
+
+    const [today, week, month, allTime, customersToday, customersWeek, customersMonth, customersAllTime, lastOrder] = await Promise.all([
+      bucket(startOfDay),
+      bucket(startOfWeek),
+      bucket(startOfMonth),
+      bucket(),
+      customersSince(startOfDay),
+      customersSince(startOfWeek),
+      customersSince(startOfMonth),
+      customersSince(),
+      Order.findOne({ initiatingPartnerId: partnerId }).sort({ createdAt: -1 }).select('createdAt totalMinor status').lean(),
+    ]);
+
+    sendSuccess(res, {
+      orders: { today: today.orders, week: week.orders, month: month.orders, allTime: allTime.orders },
+      revenueMinor: { today: today.revenueMinor, week: week.revenueMinor, month: month.revenueMinor, allTime: allTime.revenueMinor },
+      customersCreated: { today: customersToday, week: customersWeek, month: customersMonth, allTime: customersAllTime },
+      averageOrderValueMinor: allTime.orders ? Math.round(allTime.revenueMinor / allTime.orders) : 0,
+      lastOrderAt: lastOrder?.createdAt || null,
+    });
+  };
+
   listMarketAssociates = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.view');
     const { stateId, hubId } = await stateAndHub(req);
@@ -1220,6 +1478,8 @@ export class PlatformController {
         : { stateIds: stateId || { $in: context.stateIds } };
     if (requestedStatus && Object.values(AccountStatus).includes(requestedStatus as AccountStatus)) {
       filter.status = requestedStatus;
+    } else {
+      filter.status = { $ne: AccountStatus.DISABLED };
     }
     if (requestedAvailability) filter.availability = requestedAvailability;
     if (search) {
@@ -1297,8 +1557,9 @@ export class PlatformController {
       DispatchHub.find({ $or: marketAssociate.hubIds.flatMap((id) => [
         { publicId: id },
         ...(isValidObjectId(id) ? [{ _id: id }] : []),
-      ]) }).select('_id publicId name status').lean(),
-      MarketAssociateMarketAssignment.find({ marketAssociateId: marketAssociate.id || (marketAssociate as any)._id?.toString() })
+      ]) }).select('_id publicId name status stateId').lean(),
+      // Ended assignments drop off here entirely — their Market (and its Hub) should stop counting as "serving" this person too.
+      MarketAssociateMarketAssignment.find({ marketAssociateId: marketAssociate.id || (marketAssociate as any)._id?.toString(), status: { $ne: 'ended' } })
         .sort({ isPrimary: -1, createdAt: -1 })
         .lean({ virtuals: true }),
     ]);
@@ -1307,9 +1568,15 @@ export class PlatformController {
       ? await Market.find({ $or: marketIds.flatMap((id) => [
           { publicId: id },
           ...(isValidObjectId(id) ? [{ _id: id }] : []),
-        ]) }).select('_id publicId name stateId').lean()
+        ]) }).select('_id publicId name stateId hubId').lean()
       : [];
     const marketMap = new Map(markets.flatMap((market) => [[market._id.toString(), market], [market.publicId, market]]));
+    // The Hubs that matter are the ones serving where this person works: their own states plus every assigned Market's Hub.
+    const stateInternalIds = new Set((states as any[]).map((state) => String(state._id)));
+    const servingHubIds = new Set((markets as any[]).filter((market) => market.hubId).map((market) => String(market.hubId)));
+    const missingHubIds = [...servingHubIds].filter((id) => !(hubs as any[]).some((hub) => String(hub._id) === id || hub.publicId === id));
+    const extraHubs = missingHubIds.length ? await DispatchHub.find({ _id: { $in: missingHubIds.filter((id) => isValidObjectId(id)) } }).select('_id publicId name status stateId').lean() : [];
+    const relevantHubs = [...(hubs as any[]), ...(extraHubs as any[])].filter((hub) => stateInternalIds.has(String(hub.stateId)));
     const presentedProfile = await presentPlatformRecords(marketAssociate);
     sendSuccess(res, {
       ...presentedProfile,
@@ -1335,7 +1602,7 @@ export class PlatformController {
         code: state.code,
         status: state.status,
       })),
-      hubs: hubs.map((hub) => ({
+      hubs: relevantHubs.map((hub) => ({
         id: hub.publicId || hub._id.toString(),
         publicId: hub.publicId,
         name: hub.name,
@@ -1361,14 +1628,50 @@ export class PlatformController {
     const scope = await resolveMarketAssociateScope(req.body.stateIds, req.body.hubIds);
     for (const stateId of scope.stateIds) assertScope(context, stateId);
     for (const hubId of scope.hubIds) assertScope(context, undefined, hubId);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    // A leftover from a cancelled or failed invitation must not block a fresh one.
+    await clearStaleInvitationFor(email, req.body.phone);
+    if (await User.exists({ email })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
+    if (req.body.phone && await User.exists({ phone: req.body.phone })) throw new HttpError(409, 'An account with this phone number already exists', { field: 'phone' }, 'CONFLICT');
+    // Markets to assign straight away are checked before anything is created, so a bad choice leaves no half-made account.
+    const startMarkets: any[] = [];
+    for (const identifier of req.body.marketIds || []) {
+      const market = await byIdentifier(Market, identifier);
+      if (market.status !== 'active') throw new HttpError(409, `${market.name} is not active`, undefined, 'CONFLICT');
+      if (!scope.stateIds.includes(market.stateId)) throw new HttpError(409, `${market.name} is outside the states selected for this Market Associate`, undefined, 'CONFLICT');
+      assertScope(context, market.stateId);
+      startMarkets.push(market);
+    }
     const publicId = await nextPublicId('marketAssociate');
     const account = await User.create({
       publicId, accountType: AccountType.MARKETASSOCIATE, accountStatus: AccountStatus.INVITED,
       email: req.body.email, phone: req.body.phone, password: req.body.password ? await hashPassword(req.body.password) : undefined,
       firstName: req.body.firstName, lastName: req.body.lastName, role: UserRole.MARKETASSOCIATE,
       isActive: true, isEmailVerified: false, isPhoneVerified: false, scopeType: ScopeType.SELF,
+    }).catch((error: unknown) => {
+      if (isDuplicateKeyError(error)) {
+        const field = /phone/i.test(JSON.stringify((error as { keyPattern?: unknown }).keyPattern || '')) ? 'phone' : 'email';
+        throw new HttpError(409, field === 'phone' ? 'An account with this phone number already exists' : 'An account with this email already exists', { field }, 'CONFLICT');
+      }
+      throw error;
     });
-    const marketAssociate = await MarketAssociateProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
+    let marketAssociate;
+    try {
+      marketAssociate = await MarketAssociateProfile.create({ publicId, accountId: account.id, stateIds: scope.stateIds, hubIds: scope.hubIds, availability: 'unavailable', status: 'invited' });
+    } catch (error) {
+      await User.deleteOne({ _id: account._id });
+      throw error;
+    }
+    try {
+      // The hydrated document is passed on purpose: toObject() strips _id, which the assignment rules need.
+      for (const [index, market] of startMarkets.entries()) {
+        await this.makeAssignment(req, context, marketAssociate, market, { isPrimary: index === 0, priority: (index + 1) * 10, assignmentReason: 'Assigned when the account was created' });
+      }
+    } catch (error) {
+      // No half-made account: if a starting Market cannot be assigned, the whole invitation is undone.
+      await purgeUnacceptedAccount(String(account._id)).catch(() => undefined);
+      throw error;
+    }
     const invitation = await issueAccountInvitation({
       accountId: account.id,
       accountType: AccountType.MARKETASSOCIATE,
@@ -1416,7 +1719,119 @@ export class PlatformController {
       status === 'active' ? Promise.resolve() : revokeAccountSessions(marketAssociate.accountId, 'marketassociate_suspended', req.user!.sub),
     ]);
     await recordAudit(req, { action: `marketassociate.${status}`, entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:${status}:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: status === 'active' ? 'Your Market Associate account is active again' : 'Your Market Associate account was suspended',
+      body: status === 'active' ? 'You can sign in and resume taking assignments.' : String(req.body.reason || 'Contact Hook support for more information.'),
+      type: 'account_activated',
+      data: {},
+    });
     sendSuccess(res, { status });
+  };
+
+  /** Archive a Market Associate: sign-in stops, sessions end, and their Market assignments are closed. */
+  archiveMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    for (const hubId of marketAssociate.hubIds) assertScope(context, undefined, hubId);
+    if (marketAssociate.status === AccountStatus.DISABLED) throw new HttpError(409, 'This account is already archived', undefined, 'CONFLICT');
+    // Work in progress would be stranded, so it has to be finished or reassigned first.
+    const openTasks = await FulfilmentTask.countDocuments({
+      marketAssociateId: marketAssociate._id.toString(),
+      status: { $nin: ['COMPLETED', 'CANCELLED', 'UNASSIGNED'] },
+    } as any);
+    if (openTasks > 0) throw new HttpError(409, `${openTasks} order${openTasks === 1 ? ' is' : 's are'} still in progress with this Market Associate. Finish or reassign ${openTasks === 1 ? 'it' : 'them'} first.`, { openTasks }, 'CONFLICT');
+    const now = new Date();
+    await Promise.all([
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.DISABLED, availability: 'unavailable', deletedAt: now } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false, deletedAt: now } }),
+      MarketAssociateMarketAssignment.updateMany({ marketAssociateId: marketAssociate._id.toString(), status: { $in: ['active', 'paused'] } }, { $set: { status: 'ended', activeTo: now, isPrimary: false }, $push: { history: { action: 'ended', at: now, actorId: req.user!.sub, reason: 'Account archived' } } }),
+      revokeAccountSessions(marketAssociate.accountId, 'marketassociate_archived', req.user!.sub),
+      revokeAccountInvitations(marketAssociate.accountId),
+    ]);
+    await recordAudit(req, { action: 'marketassociate.archived', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.DISABLED }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:archived:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: 'Your Market Associate account was archived',
+      body: String(req.body.reason || 'Contact Hook support if you believe this is a mistake.'),
+      type: 'account_activated',
+      data: {},
+    });
+    sendSuccess(res, { status: AccountStatus.DISABLED });
+  };
+
+  /** Bring an archived Market Associate back. Their old assignments stay ended; assign Markets again. */
+  restoreMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    if (marketAssociate.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Only archived accounts can be restored', undefined, 'INVALID_STATE_TRANSITION');
+    await Promise.all([
+      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.ACTIVE }, $unset: { deletedAt: 1 } }),
+      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.ACTIVE, isActive: true }, $unset: { deletedAt: 1 } }),
+    ]);
+    await recordAudit(req, { action: 'marketassociate.restored', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, after: { status: AccountStatus.ACTIVE }, reason: req.body.reason });
+    void createCommerceNotification({
+      eventKey: `marketassociate:${marketAssociate.publicId}:restored:${Date.now()}`,
+      userId: marketAssociate.accountId,
+      title: 'Your Market Associate account was restored',
+      body: 'You can sign in and resume taking assignments.',
+      type: 'account_activated',
+      data: {},
+    });
+    sendSuccess(res, { status: AccountStatus.ACTIVE });
+  };
+
+  revokeMarketAssociateSessions = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    await revokeAccountSessions(marketAssociate.accountId, req.body.reason || 'administrative_revocation', req.user!.sub);
+    await recordAudit(req, { action: 'marketassociate.sessions_revoked', entityType: 'marketassociate', entityId: marketAssociate._id.toString(), entityPublicId: marketAssociate.publicId, reason: req.body.reason });
+    sendSuccess(res, { revoked: true });
+  };
+
+  /** Permanently deletes an ARCHIVED Market Associate; refused if the person has work history (captures, orders), which would be left pointing at nobody. */
+  deleteMarketAssociate = async (req: Request, res: Response) => {
+    const context = await access(req, 'runners.manage');
+    const marketAssociate = await byIdentifier(MarketAssociateProfile, routeParam(req.params.id));
+    for (const stateId of marketAssociate.stateIds) assertScope(context, stateId);
+    if (marketAssociate.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Archive this account before deleting it', undefined, 'INVALID_STATE_TRANSITION');
+    const expected = `DELETE ${marketAssociate.publicId}`;
+    if (String(req.body?.confirmation || '').trim() !== expected) throw new HttpError(400, `Type "${expected}" exactly to confirm`, undefined, 'VALIDATION_ERROR');
+    const id = marketAssociate._id.toString();
+    const [tasks, captures] = await Promise.all([FulfilmentTask.exists({ marketAssociateId: id }), ProductSubmission.exists({ marketAssociateId: id })]);
+    if (tasks || captures) throw new HttpError(409, 'This person has order or product history, so deleting them would orphan those records. Keep the account archived.', undefined, 'CONFLICT');
+    await recordAudit(req, { action: 'marketassociate.deleted', entityType: 'marketassociate', entityId: id, entityPublicId: marketAssociate.publicId, before: { status: marketAssociate.status }, reason: req.body.reason });
+    await revokeAccountSessions(marketAssociate.accountId, 'marketassociate_deleted', req.user!.sub);
+    await Promise.all([
+      MarketAssociateMarketAssignment.deleteMany({ marketAssociateId: id }),
+      MarketAssociateProfile.deleteOne({ _id: marketAssociate._id }),
+      User.deleteOne({ _id: marketAssociate.accountId }),
+    ]);
+    sendSuccess(res, { deleted: true });
+  };
+
+  /** Permanently deletes an ARCHIVED staff account. Super Admins and your own account are protected. */
+  deleteStaff = async (req: Request, res: Response) => {
+    const context = await access(req, 'staff.suspend');
+    const profile = await byIdentifier(StaffProfile, routeParam(req.params.id));
+    for (const stateId of profile.stateIds) assertScope(context, stateId);
+    if (profile.accountId.toString() === req.user!.sub) throw new HttpError(409, 'You cannot delete your own account', undefined, 'CONFLICT');
+    if (profile.status !== AccountStatus.DISABLED) throw new HttpError(409, 'Archive this account before deleting it', undefined, 'INVALID_STATE_TRANSITION');
+    const target = await User.findById(profile.accountId).select('roleIds').lean();
+    const targetRoles = await Role.find({ _id: { $in: target?.roleIds || [] } }).select('key').lean();
+    if (targetRoles.some((role) => role.key === 'SUPER_ADMIN')) throw new HttpError(409, 'Super Admin accounts are protected', undefined, 'CONFLICT');
+    const expected = `DELETE ${profile.publicId}`;
+    if (String(req.body?.confirmation || '').trim() !== expected) throw new HttpError(400, `Type "${expected}" exactly to confirm`, undefined, 'VALIDATION_ERROR');
+    await recordAudit(req, { action: 'staff.deleted', entityType: 'staff', entityId: profile._id.toString(), entityPublicId: profile.publicId, before: { status: profile.status }, reason: req.body.reason });
+    await revokeAccountSessions(profile.accountId, 'staff_deleted', req.user!.sub);
+    await Promise.all([StaffProfile.deleteOne({ _id: profile._id }), User.deleteOne({ _id: profile.accountId })]);
+    adminStaffCache.clear();
+    sendSuccess(res, { deleted: true });
   };
 
   resendMarketAssociateInvitation = async (req: Request, res: Response) => {
@@ -1447,44 +1862,65 @@ export class PlatformController {
     if (marketAssociate.status !== AccountStatus.INVITED) {
       throw new HttpError(409, 'Only pending Market Associate invitations can be cancelled', undefined, 'INVALID_STATE_TRANSITION');
     }
-    const revokedInvitations = await revokeAccountInvitations(marketAssociate.accountId);
-    await Promise.all([
-      MarketAssociateProfile.updateOne({ _id: marketAssociate._id }, { $set: { status: AccountStatus.DISABLED } }),
-      User.updateOne({ _id: marketAssociate.accountId }, { $set: { accountStatus: AccountStatus.DISABLED, isActive: false } }),
-    ]);
     await recordAudit(req, {
       action: 'marketassociate.invitation_cancelled',
       entityType: 'marketassociate',
       entityId: marketAssociate._id.toString(),
       entityPublicId: marketAssociate.publicId,
       before: { status: marketAssociate.status },
-      after: { status: AccountStatus.DISABLED, revokedInvitations },
+      after: { removed: true },
       reason: req.body.reason,
     });
-    sendSuccess(res, { status: AccountStatus.DISABLED, revokedInvitations });
+    if (!(await purgeUnacceptedAccount(String(marketAssociate.accountId)))) throw new HttpError(409, 'This account has already signed in, so it cannot be removed by cancelling the invitation. Archive it instead.', undefined, 'CONFLICT');
+    sendSuccess(res, { removed: true });
   };
 
   listAssignments = async (req: Request, res: Response) => sendSuccess(res, await listScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
   assignmentDetail = async (req: Request, res: Response) => sendSuccess(res, await detailScoped(req, MarketAssociateMarketAssignment, 'runners.assign'));
+  /** The one place an assignment is made (Market Associate page, Market page, or account creation); refuses inputs that would leave bad data. */
+  private async makeAssignment(req: Request, context: Awaited<ReturnType<typeof access>>, marketAssociate: any, market: any, options: { preferredHubId?: string; priority?: number; isPrimary?: boolean; activeFrom?: Date; activeTo?: Date; assignmentReason: string }) {
+    if (market.status !== 'active') throw new HttpError(409, `${market.name} is not active, so nobody can be assigned to it`, undefined, 'CONFLICT');
+    if (['archived', 'suspended'].includes(String(marketAssociate.status))) throw new HttpError(409, 'This Market Associate account is not active', undefined, 'CONFLICT');
+    if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, `This Market Associate does not work in ${market.name}'s state yet. Add the state to their profile first.`, undefined, 'CONFLICT');
+    const preferredHub = options.preferredHubId ? await ensureHub(options.preferredHubId, market.stateId) : undefined;
+    assertScope(context, market.stateId, preferredHub?._id.toString());
+    const associateId = String(marketAssociate._id ?? marketAssociate.id);
+    const duplicate = await MarketAssociateMarketAssignment.exists({ marketAssociateId: associateId, marketId: market._id.toString(), status: { $in: ['active', 'paused'] } });
+    if (duplicate) throw new HttpError(409, 'This Market Associate is already assigned to this Market', undefined, 'CONFLICT');
+    // Only one primary Market per person per state: making this one primary retires the previous flag.
+    if (options.isPrimary) {
+      await MarketAssociateMarketAssignment.updateMany({ marketAssociateId: associateId, stateId: market.stateId, isPrimary: true, status: 'active' }, { $set: { isPrimary: false } });
+    }
+    const assignment = await MarketAssociateMarketAssignment.create({
+      marketAssociateId: associateId,
+      marketId: market._id.toString(),
+      stateId: market.stateId,
+      status: 'active',
+      priority: options.priority ?? 100,
+      isPrimary: Boolean(options.isPrimary),
+      activeFrom: options.activeFrom ?? new Date(),
+      ...(options.activeTo && { activeTo: options.activeTo }),
+      assignmentReason: options.assignmentReason,
+      ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
+      createdBy: req.user!.sub,
+      history: [{ action: 'created', at: new Date(), actorId: req.user!.sub, reason: options.assignmentReason }],
+    });
+    await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject(), reason: options.assignmentReason });
+    return assignment;
+  }
+
   createAssignment = async (req: Request, res: Response) => {
     const context = await access(req, 'runners.assign');
     const marketAssociate = await byIdentifier(MarketAssociateProfile, req.body.marketAssociateId);
     const market = await byIdentifier(Market, req.body.marketId);
-    const preferredHub = req.body.preferredHubId
-      ? await ensureHub(req.body.preferredHubId, market.stateId)
-      : undefined;
-    assertScope(context, market.stateId, preferredHub?._id.toString());
-    if (!marketAssociate.stateIds.includes(market.stateId)) throw new HttpError(409, 'Market Associate is not assigned to the Market state', undefined, 'CONFLICT');
-    const assignment = await MarketAssociateMarketAssignment.create({
-      ...req.body,
-      stateId: market.stateId,
-      marketAssociateId: marketAssociate._id.toString(),
-      marketId: market._id.toString(),
-      ...(preferredHub && { preferredHubId: preferredHub._id.toString() }),
-      createdBy: req.user!.sub,
-      history: [{ action: 'created', at: new Date(), actorId: req.user!.sub }],
+    const assignment = await this.makeAssignment(req, context, marketAssociate, market, {
+      preferredHubId: req.body.preferredHubId,
+      priority: req.body.priority,
+      isPrimary: req.body.isPrimary,
+      activeFrom: req.body.activeFrom,
+      activeTo: req.body.activeTo,
+      assignmentReason: req.body.assignmentReason,
     });
-    await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject() });
     await sendPlatformCreated(res, assignment.toObject());
   };
   updateAssignment = async (req: Request, res: Response) => {
@@ -1573,6 +2009,25 @@ export class PlatformController {
       };
     });
     sendSuccess(res, paginated(rows, total, page, limit));
+  };
+  /** Counts and the entity types actually present, so the Audit Log filters never lag behind what the platform records. */
+  auditFacets = async (req: Request, res: Response) => {
+    await access(req, 'audit.view');
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const [total, today, entityTypes] = await Promise.all([
+      PlatformAuditLog.countDocuments({}),
+      PlatformAuditLog.countDocuments({ createdAt: { $gte: startOfToday } }),
+      PlatformAuditLog.aggregate([
+        { $group: { _id: '$entityType', count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+      ]),
+    ]);
+    sendSuccess(res, {
+      total,
+      today,
+      entityTypes: entityTypes.filter((row) => row._id).map((row) => ({ value: String(row._id), count: Number(row.count) })),
+    });
   };
   auditDetail = async (req: Request, res: Response) => {
     await access(req, 'audit.view');

@@ -5,7 +5,7 @@ import { ProductLike } from "@models/products/product-like.model";
 import { Product } from "@models/products/product.model";
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
-import { publicProductRepresentations } from "@services/commercial-catalog.service";
+import { publicProductRepresentations } from "@modules/catalog/commercial-catalog.service";
 import { HttpError, sendSuccess } from "@utils/http";
 
 function productFilter(identifier: string) {

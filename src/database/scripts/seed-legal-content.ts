@@ -1,14 +1,8 @@
-/**
- * Seeds placeholder Terms of Service / Privacy Policy content so /terms and
- * /policy are never empty. Upserts by `type`, so re-running this is safe and
- * will NOT overwrite content an admin has already edited via the Legal
- * Content settings page (only inserts when a document doesn't exist yet).
- *
- * Usage: node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts
- */
+/** Seeds placeholder Terms/Privacy/Returns content; upserts by `type` so it never overwrites an admin's already-edited document. */
 import dotenv from 'dotenv';
 import { connectDatabase, disconnectDatabase } from '@config/data-source';
 import { LegalContent } from '@models/platform/legal-content.model';
+import { DEFAULT_RETURNS_POLICY_HTML } from '@lib/legal-defaults';
 
 dotenv.config({ quiet: true });
 
@@ -21,7 +15,7 @@ ${PLACEHOLDER_NOTICE}
 <h2>2. What Hook does</h2>
 <p>Hook sources products from physical markets through our network of Market Associates and Hook Partners, and coordinates delivery to you. Prices, availability, and delivery times shown in the app are estimates and may change based on market conditions.</p>
 <h2>3. Orders and payment</h2>
-<p>All orders are subject to acceptance and product availability. Payment is processed securely through our payment partners. For orders with pay-on-delivery, you agree to be present and available at the agreed delivery location and time.</p>
+<p>All orders are subject to acceptance and product availability. Payment is processed securely through our payment partners. You agree to be reachable at the delivery address you provide so your order can be handed over.</p>
 <h2>4. Negotiated prices</h2>
 <p>Where negotiation is available, any price you agree to through the app is binding once confirmed and will be honoured for the negotiated item and quantity within the stated validity window.</p>
 <h2>5. Returns and refunds</h2>
@@ -45,9 +39,9 @@ ${PLACEHOLDER_NOTICE}
 <h2>3. Sharing your information</h2>
 <p>We share the minimum necessary information with Market Associates and Hook Partners to fulfil your order, and with payment processors to complete transactions. We do not sell your personal information.</p>
 <h2>4. Data retention</h2>
-<p>We retain your information for as long as your account is active and as needed to comply with legal, tax, and accounting obligations.</p>
+<p>We retain your information for as long as your account is active. When you delete your account we permanently erase your personal data (name, email, phone number, saved addresses, device tokens, cart, notifications and sign-in records) after a 14-day cooling-off period during which you can cancel. We keep only the order, payment and refund records that legal, tax and accounting obligations require, with your identity removed. Any Hook credit balance is forfeited when the account is deleted.</p>
 <h2>5. Your rights</h2>
-<p>You may request access to, correction of, or deletion of your personal information at any time through the app's account settings or by contacting support.</p>
+<p>You may request access to, correction of, or deletion of your personal information at any time. To delete your account, open Profile &gt; Delete account in the app, or visit <a href="/delete-account">the account deletion page</a> without signing in. You can cancel a deletion request at any time during the 14-day cooling-off period.</p>
 <h2>6. Security</h2>
 <p>We use industry-standard measures to protect your information, including encryption in transit and restricted access to sensitive data.</p>
 <h2>7. Changes to this policy</h2>
@@ -68,6 +62,11 @@ async function main() {
     LegalContent.findOneAndUpdate(
       { type: 'privacy' },
       { $setOnInsert: { type: 'privacy', title: 'Privacy Policy', bodyHtml: PRIVACY_BODY, version: 1, effectiveDate: new Date() } },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
+    ).lean(),
+    LegalContent.findOneAndUpdate(
+      { type: 'returns' },
+      { $setOnInsert: { type: 'returns', title: 'Returns Policy', bodyHtml: DEFAULT_RETURNS_POLICY_HTML, version: 1, effectiveDate: new Date() } },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     ).lean(),
   ]);

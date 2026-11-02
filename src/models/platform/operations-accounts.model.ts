@@ -28,6 +28,8 @@ export interface HookPartner extends BaseEntity {
   stateId: string;
   cityId: string;
   zoneId?: string;
+  /** The Market this Partner location operates within — where it draws its assisted-checkout customers from. */
+  marketId?: string;
   address: string;
   coordinates?: { lat: number; lng: number };
   contact: Record<string, unknown>;
@@ -81,6 +83,7 @@ const partnerSchema = createSchema<HookPartner>({
   stateId: { type: String, required: true, index: true },
   cityId: { type: String, required: true, index: true },
   zoneId: { type: String, index: true },
+  marketId: { type: String, index: true },
   address: { type: String, required: true },
   coordinates: { type: Object },
   contact: { type: Object, required: true },

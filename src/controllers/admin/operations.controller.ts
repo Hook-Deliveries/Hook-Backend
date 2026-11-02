@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { auditAdminAction } from '@lib/audit';
 import { DEFAULT_OPERATIONAL_STATE_CODE, NIGERIAN_STATES } from '@lib/nigeria-states';
 import { OperationalState } from '@models/operations/operational-state.model';
-import { ensureOperationalStatesCatalog, normalizeStateCode } from '@services/operational-state.service';
+import { ensureOperationalStatesCatalog, normalizeStateCode } from '@modules/fulfilment/operational-state.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { adminOperationsCache } from '@lib/ttl-cache';
 

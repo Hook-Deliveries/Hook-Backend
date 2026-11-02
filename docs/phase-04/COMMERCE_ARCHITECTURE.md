@@ -15,6 +15,6 @@ The backend is the only authority for basket ownership, catalog versions, quote 
 
 Orders: `AWAITING_PAYMENT`, `VERIFICATION_PENDING`, `OPERATIONS_REVIEW`, `APPROVED_FOR_FULFILMENT`, `CANCELLED`.
 
-Payments: `PENDING`, `PROCESSING`, `CONFIRMED`, `FAILED`, `DUE_AT_HANDOVER`, `REFUND_PENDING`, `REFUNDED`.
+Payments: `PENDING`, `PROCESSING`, `CONFIRMED`, `FAILED`, `REFUND_PENDING`, `REFUNDED`.
 
-Only verified Paystack evidence or an approved POD decision can emit `ORDER_APPROVED_FOR_FULFILMENT`.
+Only verified Paystack evidence can emit `ORDER_APPROVED_FOR_FULFILMENT`.

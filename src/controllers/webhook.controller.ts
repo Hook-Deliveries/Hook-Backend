@@ -3,7 +3,7 @@ import { AppDataSource } from '@config/data-source';
 import { Order } from '@models/orders/order.model';
 import { Payment } from '@models/payments/payment.model';
 import { EscrowLedger } from '@models/payments/escrow-ledger.model';
-import { PaymentService } from '@services/payment.service';
+import { PaymentService } from '@modules/payments/payment.service';
 import { sendError } from '@utils/http';
 
 export class WebhookController {

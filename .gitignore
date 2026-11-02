@@ -44,3 +44,9 @@ temp/
 
 # Local database backups
 .backups/
+
+deploy/certs/
+
+# Local credentials
+.super-admin-credentials
+.launch-credentials

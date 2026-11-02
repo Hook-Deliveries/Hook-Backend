@@ -1,9 +1,11 @@
+import { rateLimit } from "@middleware/security";
 import { Router } from "express";
 import { z } from "zod";
 import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
 import { requireAccountType, requireAuth } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
+import { withIdempotency } from '@middleware/idempotency';
 import {
   HookPartner,
   MarketAssociateMarketAssignment,
@@ -28,18 +30,44 @@ import {
 } from "@validations/commerce.schemas";
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
-import { itemVerifySchema } from '@validations/fulfilment.schemas';
+import { itemIssueSchema, itemVerifySchema } from '@validations/fulfilment.schemas';
 import { Product } from '@models/products/product.model';
-import { CatalogAvailabilityService } from '@services/catalog-availability.service';
+import { CatalogAvailabilityService } from '@modules/catalog/catalog-availability.service';
 import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
-import { NotificationService } from '@services/notification.service';
+import { NotificationService } from '@modules/notifications/notification.service';
+import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
+
+const webPushSubscribeSchema = z.object({
+  endpoint: z.string().url(),
+  keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
+});
 
 function mountNotificationRoutes(router: Router) {
   const notifications = new NotificationService(
     AppDataSource.getRepository(DeviceToken),
     AppDataSource.getRepository(Notification),
+  );
+  router.post(
+    '/push/subscribe',
+    validateBody(webPushSubscribeSchema),
+    asyncHandler(async (req, res) => {
+      await WebPushSubscription.findOneAndUpdate(
+        { endpoint: req.body.endpoint },
+        { $set: { userId: req.user!.sub, p256dh: req.body.keys.p256dh, auth: req.body.keys.auth, isActive: true, lastSeenAt: new Date() } },
+        { upsert: true },
+      );
+      sendSuccess(res, { subscribed: true });
+    }),
+  );
+  router.post(
+    '/push/unsubscribe',
+    validateBody(z.object({ endpoint: z.string().url() })),
+    asyncHandler(async (req, res) => {
+      await WebPushSubscription.updateOne({ endpoint: req.body.endpoint, userId: req.user!.sub }, { $set: { isActive: false } });
+      sendSuccess(res, { subscribed: false });
+    }),
   );
   router.get(
     '/notifications',
@@ -94,12 +122,18 @@ export function createMarketAssociateRouter() {
   );
   router.patch(
     "/profile",
+    validateBody(z.object({
+      phone: z.string().trim().min(7).max(24).regex(/^[+\d][\d\s()-]*$/, "Enter a valid phone number").optional(),
+      avatarUrl: z.union([z.string().trim().url().max(500), z.literal("")]).optional(),
+      // Merged into the saved preferences, so one key can change without wiping the rest.
+      preferences: z.record(z.string().max(60), z.unknown()).optional(),
+    }).strict()),
     asyncHandler(async (req, res) => {
       const { phone, avatarUrl, preferences } = req.body ?? {};
       const set: Record<string, unknown> = {};
       const unset: Record<string, unknown> = {};
       if (phone !== undefined) set.phone = phone;
-      if (preferences !== undefined) set.preferences = preferences;
+      if (preferences !== undefined) for (const [key, value] of Object.entries(preferences as Record<string, unknown>)) set[`preferences.${key}`] = value;
       // An empty avatarUrl means "remove my photo"; $set with undefined is a no-op.
       if (avatarUrl !== undefined) {
         if (avatarUrl) set.avatarUrl = avatarUrl;
@@ -182,6 +216,18 @@ export function createMarketAssociateRouter() {
     validateBody(itemVerifySchema),
     asyncHandler(fulfilment.verifyItem),
   );
+  router.put(
+    "/fulfilments/:id/items/:orderItemId",
+    validateBody(itemVerifySchema),
+    asyncHandler(fulfilment.verifyItem),
+  );
+  router.post(
+    "/fulfilments/:id/items/:orderItemId/issues",
+    validateBody(itemIssueSchema),
+    asyncHandler(fulfilment.marketAssociateItemIssue),
+  );
+  // Declared before /:action, which would otherwise treat "handover-code" as an action name.
+  router.post("/fulfilments/:id/handover-code", asyncHandler(fulfilment.regenerateHandoverCode));
   router.post(
     "/fulfilments/:id/:action",
     validateBody(z.object({ version: z.coerce.number().int().positive(), actualCostMinor: z.coerce.number().int().nonnegative().optional(), evidence: z.array(z.object({ type: z.string().min(1), url: z.string().url().optional(), assetId: z.string().optional(), note: z.string().max(500).optional() })).optional(), arrivedAt: z.string().datetime().optional() }).passthrough()),
@@ -279,7 +325,12 @@ export function createPartnerRouter() {
       sendSuccess(res, partner);
     }),
   );
-  router.get("/customers/lookup", asyncHandler(commerce.lookupCustomer));
+  // Exact-email lookups are throttled per partner so the directory cannot be probed for who has an account.
+  router.get(
+    "/customers/lookup",
+    rateLimit("partner-customer-lookup", { windowMs: 10 * 60_000, max: 20, key: (req) => `partner:${req.user?.sub || "anon"}`, message: "Too many customer lookups. Please wait a few minutes." }),
+    asyncHandler(commerce.lookupCustomer),
+  );
   router.post(
     "/customers",
     validateBody(
@@ -350,8 +401,8 @@ export function createPartnerRouter() {
   router.get("/orders", asyncHandler(commerce.orders));
   router.get("/fulfilment/custody", asyncHandler(fulfilment.partnerCustodyList));
   router.get("/fulfilment/custody/:orderId", asyncHandler(fulfilment.partnerCustody));
-  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.receiveCustody));
-  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), asyncHandler(fulfilment.releaseCustody));
+  router.post("/fulfilment/custody/:id/receive", validateBody(z.object({ idempotencyKey: z.string().min(8).optional() }).strict()), withIdempotency({ operation: 'POST /fulfilment/custody/:id/receive', tier: 'financial' }), asyncHandler(fulfilment.receiveCustody));
+  router.post("/fulfilment/custody/:id/release", validateBody(z.object({ code: z.string().regex(/^\d{6}$/), idempotencyKey: z.string().min(8).optional() }).strict()), withIdempotency({ operation: 'POST /fulfilment/custody/:id/release', tier: 'financial' }), asyncHandler(fulfilment.releaseCustody));
   router.get("/commerce/config", asyncHandler(commerce.commerceConfig));
   router.post(
     "/orders/:orderId/payment-instructions",

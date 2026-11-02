@@ -54,6 +54,10 @@ export function assertSafeEnvironment() {
       requireEnv('CLOUDINARY_API_KEY');
       requireEnv('CLOUDINARY_API_SECRET');
     }
+    const packageKey = requireEnv('PACKAGE_CREDENTIAL_ENCRYPTION_KEY');
+    if (packageKey.length < 32 || packageKey.startsWith('replace-with-')) {
+      throw new Error('PACKAGE_CREDENTIAL_ENCRYPTION_KEY must be an independent production secret with at least 32 characters');
+    }
     for (const name of ['BOOTH_ACCESS_SECRET', 'BOOTH_SESSION_SECRET']) {
       const value = requireEnv(name);
       if (value.length < 32 || value.startsWith('replace-with-')) {
@@ -61,22 +65,15 @@ export function assertSafeEnvironment() {
       }
     }
     requireEnv('PAYSTACK_SECRET_KEY');
-    requireEnv('GOOGLE_WEB_CLIENT_ID');
-    const opayConfigured = [
-      process.env.OPAY_PAYIN_PUBLIC_KEY,
-      process.env.OPAY_PAYIN_SECRET_KEY,
-      process.env.OPAY_PAYIN_MERCHANT_ID,
-      process.env.OPAY_PAYIN_CALLBACK_URL,
-    ].some(Boolean);
-    if (opayConfigured) {
-      requireEnv('OPAY_PAYIN_PUBLIC_KEY');
-      requireEnv('OPAY_PAYIN_SECRET_KEY');
-      requireEnv('OPAY_PAYIN_MERCHANT_ID');
-      const callbackUrl = requireEnv('OPAY_PAYIN_CALLBACK_URL');
-      if (!callbackUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_CALLBACK_URL must use HTTPS in production');
-      const baseUrl = process.env.OPAY_PAYIN_BASE_URL;
-      if (baseUrl && !baseUrl.startsWith('https://')) throw new Error('OPAY_PAYIN_BASE_URL must use HTTPS in production');
+    // Optional: falls back to JWT_SECRET (already required above to be a
+    // strong, independent production secret) so a dedicated key is not
+    // mandatory. Set it explicitly only if package credentials should be
+    // encrypted with a key independent of JWT_SECRET.
+    const packageCredentialKey = process.env.PACKAGE_CREDENTIAL_ENCRYPTION_KEY;
+    if (packageCredentialKey && packageCredentialKey.length < 32) {
+      throw new Error('PACKAGE_CREDENTIAL_ENCRYPTION_KEY must contain at least 32 characters');
     }
+    requireEnv('GOOGLE_WEB_CLIENT_ID');
   }
 }
 

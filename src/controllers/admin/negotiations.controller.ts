@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
-import { NegotiationStatus } from '@lib/constants';
+import { NegotiationStatus, ScopeType } from '@lib/constants';
+import { Market } from '@models/platform/network.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { User } from '@models/users/user.model';
-import { recordAudit } from '@services/platform-audit.service';
+import { recordAudit } from '@modules/platform/platform-audit.service';
 import { HttpError, sendSuccess } from '@utils/http';
 import { routeParam } from './admin.helpers';
 
@@ -45,9 +46,25 @@ function safeSession(session: any, product?: any, includeTranscript = false) {
 }
 
 export class AdminNegotiationsController {
+  private async scope(req: Request): Promise<Record<string, unknown>> {
+    const filter: Record<string, unknown> = {};
+    if (req.user?.scopeType !== ScopeType.GLOBAL) {
+      filter.sourceStateId = { $in: req.user?.assignedStateIds || [] };
+      if (req.user?.scopeType === ScopeType.HUB) {
+        const markets = await Market.find({ hubId: { $in: req.user.assignedHubIds || [] } }).select('_id publicId').lean();
+        filter.marketId = { $in: markets.flatMap((entry) => [entry._id.toString(), entry.publicId]) };
+      }
+    }
+    if (req.platformContext?.stateId) filter.sourceStateId = req.platformContext.stateId;
+    if (req.platformContext?.hubId) {
+      const markets = await Market.find({ hubId: req.platformContext.hubId }).select('_id publicId').lean();
+      filter.marketId = { $in: markets.flatMap((entry) => [entry._id.toString(), entry.publicId]) };
+    }
+    return filter;
+  }
   list = async (req: Request, res: Response) => {
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
-    const filter: Record<string, unknown> = {};
+    const filter: Record<string, unknown> = await this.scope(req);
     if (req.query.status && Object.values(NegotiationStatus).includes(req.query.status as NegotiationStatus)) {
       filter.status = req.query.status;
     }
@@ -85,7 +102,7 @@ export class AdminNegotiationsController {
   };
 
   detail = async (req: Request, res: Response) => {
-    const filter: Record<string, unknown> = identifier(routeParam(req.params.id));
+    const filter: Record<string, unknown> = { ...identifier(routeParam(req.params.id)), ...await this.scope(req) };
     if (req.platformContext?.stateId) filter.sourceStateId = req.platformContext.stateId;
     const session = await Negotiation.findOne(filter).lean({ virtuals: true });
     if (!session) throw new HttpError(404, 'Negotiation not found', undefined, 'NOT_FOUND');
@@ -107,7 +124,7 @@ export class AdminNegotiationsController {
       maximumOffers: settings?.negotiationMaximumOffers || 3,
       quoteMinutes: settings?.negotiationQuoteMinutes || 30,
       azureWordingEnabled: settings?.negotiationAzureWordingEnabled !== false,
-      providerConfigured: Boolean(process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT_NAME),
+      providerConfigured: Boolean(process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT_NAME && process.env.AZURE_OPENAI_API_VERSION),
       updatedAt: settings?.updatedAt,
     });
   };

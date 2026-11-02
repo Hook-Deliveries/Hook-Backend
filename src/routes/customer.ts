@@ -4,11 +4,10 @@ import { CustomerController } from "@controllers/customer.controller";
 import { NegotiationController } from "@controllers/negotiation.controller";
 import { requireCustomerIdentity } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
+import { withIdempotency } from "@middleware/idempotency";
 import {
   cartQuantitySchema,
   customerRefundRequestSchema,
-  deletionRequestSchema,
-  checkoutEventSchema,
 } from "@validations/common.schemas";
 import {
   negotiationCreateSchema,
@@ -67,6 +66,21 @@ export function createCustomerRouter() {
     asyncHandler(controller.clearCartState),
   );
   router.get("/commerce/config", asyncHandler(controller.commerceConfig));
+  // Public: the checkout picker needs the courier list before sign-in gates.
+  router.get("/logistics-providers", asyncHandler(controller.logisticsProviders));
+
+  router.get("/credits", requireAuth, asyncHandler(controller.credits));
+  router.get("/referrals", requireAuth, asyncHandler(controller.referrals));
+  router.post(
+    "/coupons/validate",
+    requireAuth,
+    validateBody(z.object({
+      code: z.string().trim().min(3).max(40),
+      subtotalMinor: z.coerce.number().int().nonnegative(),
+      deliveryFeeMinor: z.coerce.number().int().nonnegative().default(0),
+    })),
+    asyncHandler(controller.validateCoupon),
+  );
 
   router.get(
     "/likes",
@@ -131,6 +145,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(checkoutConfirmSchema),
+    withIdempotency({ operation: "POST /checkout/confirm", tier: "financial", fingerprint: (req) => ({ params: req.params }) }),
     asyncHandler(controller.checkoutCombinedConfirm),
   );
   router.post(
@@ -145,15 +160,38 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(checkoutConfirmSchema),
+    withIdempotency({ operation: "POST /checkout/states/:stateId/confirm", tier: "financial", fingerprint: (req) => ({ params: req.params }) }),
     asyncHandler(controller.checkoutConfirm),
   );
   router.get("/orders", asyncHandler(controller.listOrders));
+  // Registered ahead of /orders/:id below, since that route would otherwise
+  // match "pending-approvals" as an :id.
+  router.get(
+    "/orders/pending-approvals",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(controller.pendingApprovals),
+  );
   router.get("/orders/:id", asyncHandler(controller.getOrder));
+  router.get(
+    "/orders/:id/receipt",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    asyncHandler(fulfilment.customerReceipt),
+  );
   router.get(
     "/orders/:id/fulfilment",
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     asyncHandler(fulfilment.customerFulfilment),
+  );
+  router.post(
+    "/orders/:orderId/substitutions/:id/respond",
+    requireAuth,
+    requireAccountType(AccountType.CUSTOMER),
+    validateBody(z.object({ decision: z.enum(['ACCEPT', 'DECLINE']), version: z.coerce.number().int().positive() }).strict()),
+    withIdempotency({ operation: 'POST /orders/:orderId/substitutions/:id/respond', tier: 'financial', fingerprint: (req) => ({ params: req.params }) }),
+    asyncHandler(fulfilment.customerItemResolution),
   );
   router.post(
     "/orders/:id/returns",
@@ -180,11 +218,13 @@ export function createCustomerRouter() {
   router.post(
     "/orders/:id/cancel",
     validateBody(z.object({ reason: z.string().optional() })),
+    withIdempotency({ operation: "POST /orders/:id/cancel", tier: "consequential" }),
     asyncHandler(controller.cancelOrder),
   );
   router.post(
     "/orders/:id/refunds",
     validateBody(customerRefundRequestSchema),
+    withIdempotency({ operation: "POST /orders/:id/refunds", tier: "financial" }),
     asyncHandler(controller.requestRefund),
   );
 
@@ -196,6 +236,8 @@ export function createCustomerRouter() {
     asyncHandler(negotiations.create),
   );
   router.get("/negotiations/:id", asyncHandler(negotiations.detail));
+  router.post('/negotiations/:id/messages', validateBody(z.object({ message: z.string().trim().min(1).max(500) }).strict()), asyncHandler(negotiations.message));
+  router.post('/negotiations/:id/actions/:actionId/confirm', validateBody(z.object({ quantity: z.number().int().min(1).max(20), variantId: z.string().min(1).max(100) }).strict()), asyncHandler(negotiations.confirmAction));
   router.post(
     "/negotiations/:id/offers",
     validateBody(negotiationOfferSchema),
@@ -209,6 +251,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentInitializeV4Schema),
+    withIdempotency({ operation: "POST /payments/initialize", tier: "financial" }),
     asyncHandler(controller.initializePayment),
   );
   router.post(
@@ -216,6 +259,7 @@ export function createCustomerRouter() {
     requireAuth,
     requireAccountType(AccountType.CUSTOMER),
     validateBody(paymentLinkCreateSchema),
+    withIdempotency({ operation: "POST /payments/links", tier: "financial" }),
     asyncHandler(paymentLinks.create),
   );
   router.post(
@@ -234,18 +278,21 @@ export function createCustomerRouter() {
     "/payments/orders/:orderId/status",
     asyncHandler(controller.paymentStatus),
   );
-  router.post(
-    "/support/account-deletion",
-    validateBody(deletionRequestSchema),
-    asyncHandler(controller.requestDeletion),
-  );
-  router.post(
-    "/analytics/checkout-events",
-    validateBody(checkoutEventSchema),
-    asyncHandler(controller.recordCheckoutEvent),
-  );
-
   router.get("/notifications", asyncHandler(controller.listNotifications));
+  router.get("/notifications/preferences", asyncHandler(controller.notificationPreferences));
+  router.patch(
+    "/notifications/preferences",
+    validateBody(z.object({
+      groups: z.object({ credit: z.boolean(), reminders: z.boolean(), discovery: z.boolean() }).partial().strict().optional(),
+      quietHours: z.object({
+        enabled: z.boolean(),
+        start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+      }).partial().strict().optional(),
+    }).strict()),
+    asyncHandler(controller.updateNotificationPreferences),
+  );
+  router.post("/notifications/:id/opened", asyncHandler(controller.notificationOpened));
   router.patch(
     "/notifications/read-all",
     asyncHandler(controller.markAllNotificationsRead),

@@ -51,6 +51,8 @@ const CartSchema = createSchema<Cart>({
 });
 
 CartSchema.index({ userId: 1, isCheckedOut: 1 });
+// The abandoned-cart scan reads active carts by last touch.
+CartSchema.index({ status: 1, updatedAt: 1 });
 CartSchema.index({ customerId: 1, status: 1, isCheckedOut: 1 });
 CartSchema.index({ ownerType: 1, customerId: 1, status: 1 });
 CartSchema.index({

@@ -5,7 +5,7 @@ import { AccountType, ScopeType, UserRole } from '@lib/constants';
 import { isActiveAccount } from '@lib/account-state';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
-import { resolveAccessContext } from '@services/access-control.service';
+import { resolveAccessContext } from '@modules/identity/access-control.service';
 import { HttpError } from '@utils/http';
 
 interface TokenPayload {

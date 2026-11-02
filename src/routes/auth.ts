@@ -12,15 +12,24 @@ import {
   registerSchema,
 } from '@validations/common.schemas';
 import { asyncHandler, sendSuccess } from '@utils/http';
-import { acceptAccountInvitation } from '@services/account-invitation.service';
+import { acceptAccountInvitation } from '@modules/identity/account-invitation.service';
 
-const otpSchema = z.object({ email: z.string().email(), code: z.string().min(4) });
+const deviceMetadataFields = {
+  deviceId: z.string().trim().min(1).max(120).optional(),
+  deviceName: z.string().trim().min(1).max(120).optional(),
+  platform: z.string().trim().min(1).max(40).optional(),
+};
+
+/** Optional on every path that can mint a brand-new customer account. */
+const referralCodeField = { referralCode: z.string().trim().min(4).max(20).optional() };
+
+const otpSchema = z.object({ email: z.string().email(), code: z.string().min(4), ...deviceMetadataFields });
 const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 const logoutSchema = z.object({ refreshToken: z.string().min(1).optional() });
 const lookupSchema = z.object({ email: z.string().email() });
 const signupStartSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().min(8),
 });
 const signupVerifySchema = z.object({
   signupSessionToken: z.string().min(32),
@@ -34,15 +43,21 @@ const signupCompleteSchema = z.object({
   avatarUrl: z.string().url().optional(),
   address: z.record(z.string(), z.unknown()).optional(),
   preferences: z.record(z.string(), z.unknown()).optional(),
+  ...deviceMetadataFields,
+  ...referralCodeField,
 });
 const passwordVerifySchema = z.object({ email: z.string().email(), code: z.string().min(4) });
 const googleAuthSchema = z.object({
   idToken: z.string().min(20),
+  ...deviceMetadataFields,
+  ...referralCodeField,
 });
 const appleAuthSchema = z.object({
   identityToken: z.string().min(20),
   firstName: z.string().trim().max(80).optional(),
   lastName: z.string().trim().max(80).optional(),
+  ...deviceMetadataFields,
+  ...referralCodeField,
 });
 
 export function createAuthRouter() {

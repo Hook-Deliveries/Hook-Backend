@@ -4,8 +4,9 @@ import { PlatformController } from '@controllers/admin/platform.controller';
 import { requirePermission } from '@middleware/permissions';
 import { validateBody } from '@middleware/validate';
 import { asyncHandler } from '@utils/http';
+import { requireSuperAdmin } from '@middleware/roles';
 import { AdminMarketVendorController } from '@controllers/market-vendor.controller';
-import { marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
+import { marketVendorSchema, marketVendorUpdateSchema, vendorReconcileSchema } from '@validations/vendor.schemas';
 
 const idList = z.array(z.string().min(1)).default([]);
 const reason = z.string().trim().min(3).max(500).optional();
@@ -22,8 +23,6 @@ const stateSchema = z.object({
   currency: z.string().length(3).default('NGN'),
   deliveryPromiseHours: z.number().int().positive().default(24),
   operationsEnabled: z.boolean().default(false),
-  payAtHubEnabled: z.boolean().default(false),
-  payAtHubLimitMinor: z.number().int().nonnegative().default(10000000),
   configuration: z.record(z.string(), z.unknown()).optional(),
   reason,
 });
@@ -99,16 +98,20 @@ const partnerSchema = z.object({
   stateId: z.string().min(1),
   cityId: z.string().min(1),
   zoneId: z.string().optional(),
+  marketId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
   coordinates,
   contact: z.record(z.string(), z.unknown()),
   devicePolicy: z.record(z.string(), z.unknown()).optional(),
   reason,
 });
+const deleteAccountSchema = z.object({ reason, confirmation: z.string().min(3).max(80) }).strict();
 const marketAssociateSchema = z.object({
   ...person,
   stateIds: z.array(z.string().min(1)).min(1),
   hubIds: idList,
+  /** Markets to assign as soon as the account exists; the first becomes the primary Market. */
+  marketIds: z.array(z.string().min(1)).max(10).optional(),
   availability: z.enum(['available', 'unavailable', 'paused']).optional(),
   reason,
 });
@@ -123,6 +126,28 @@ const assignmentSchema = z.object({
   assignmentReason: z.string().trim().min(3).max(500),
 });
 
+/**
+ * Builds the PATCH schema from the create schema.
+ *
+ * `.partial()` alone is not enough: fields declared with `.default([])` still
+ * inject that default when the client omits them, so a PATCH that never
+ * mentions `marketIds` arrived at the controller carrying `marketIds: []` and
+ * silently wiped the hub's market links. Defaults are right for POST (a new
+ * record with no links) and wrong for PATCH, so they are stripped here.
+ *
+ * An explicitly sent `[]` still comes through, so clearing links on purpose
+ * keeps working.
+ */
+function patchSchema(schema: z.ZodObject<any>) {
+  const shape = Object.fromEntries(
+    Object.entries(schema.shape).map(([key, value]) => {
+      const inner = (value as any)?._def?.innerType;
+      return [key, inner ? inner.optional() : value];
+    }),
+  );
+  return z.object(shape).partial();
+}
+
 function crud(
   router: Router,
   path: string,
@@ -134,7 +159,7 @@ function crud(
   router.get(path, asyncHandler(handlers.list));
   router.post(path, validateBody(schema), asyncHandler(handlers.create));
   router.get(`${path}/:id`, asyncHandler(handlers.detail));
-  router.patch(`${path}/:id`, validateBody(schema.partial()), asyncHandler(handlers.update));
+  router.patch(`${path}/:id`, validateBody(patchSchema(schema)), asyncHandler(handlers.update));
   if (handlers.status) {
     router.post(`${path}/:id/activate`, validateBody(lifecycleSchema), asyncHandler(handlers.status));
     router.post(`${path}/:id/deactivate`, validateBody(lifecycleSchema), asyncHandler(handlers.status));
@@ -174,6 +199,7 @@ export function createPlatformAdminRouter() {
   router.post('/staff/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.staffStatus));
   router.post('/staff/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveStaff));
   router.post('/staff/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeStaffSessions));
+  router.delete('/staff/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deleteStaff));
   router.post('/staff/:id/resend-invitation', asyncHandler(controller.resendStaffInvitation));
   router.post('/staff/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelStaffInvitation));
 
@@ -189,6 +215,11 @@ export function createPlatformAdminRouter() {
     list: controller.listMarkets, create: controller.createMarket, detail: controller.marketDetail,
     update: controller.updateMarket, status: controller.marketStatus,
   }, marketSchema);
+  // Global vendor directory. The per-Market list below still works; this is
+  // the entry point for the admin Vendors page.
+  router.get('/market-vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.directory));
+  router.post('/markets/:id/vendors', requirePermission('market.vendors.manage'), validateBody(marketVendorSchema), asyncHandler(marketVendors.create));
+  router.post('/market-vendors/:id/invite', requirePermission('market.vendors.invite'), asyncHandler(marketVendors.invite));
   router.get('/markets/:id/vendors', requirePermission('market.vendors.view'), asyncHandler(marketVendors.vendors));
   router.get('/market-vendors/:id', requirePermission('market.vendors.view'), asyncHandler(marketVendors.detail));
   router.get('/market-vendors/:id/payment-details', requirePermission('market.payments.view'), asyncHandler(marketVendors.paymentDetails));
@@ -211,6 +242,11 @@ export function createPlatformAdminRouter() {
   router.post('/partners/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.partnerStatus));
   router.post('/partners/:id/resend-invitation', asyncHandler(controller.resendPartnerInvitation));
   router.post('/partners/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelPartnerInvitation));
+  router.post('/partners/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archivePartner));
+  router.post('/partners/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.restorePartner));
+  router.post('/partners/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokePartnerSessions));
+  router.delete('/partners/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deletePartner));
+  router.get('/partners/:id/analytics', asyncHandler(controller.partnerAnalytics));
 
   router.get('/market-associates', asyncHandler(controller.listMarketAssociates));
   router.post('/market-associates', validateBody(marketAssociateSchema), asyncHandler(controller.createMarketAssociate));
@@ -219,6 +255,10 @@ export function createPlatformAdminRouter() {
   router.post('/market-associates/:id/activate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
   router.post('/market-associates/:id/suspend', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
   router.post('/market-associates/:id/reactivate', validateBody(lifecycleSchema), asyncHandler(controller.marketAssociateStatus));
+  router.post('/market-associates/:id/archive', validateBody(lifecycleSchema), asyncHandler(controller.archiveMarketAssociate));
+  router.post('/market-associates/:id/restore', validateBody(lifecycleSchema), asyncHandler(controller.restoreMarketAssociate));
+  router.post('/market-associates/:id/revoke-sessions', validateBody(lifecycleSchema), asyncHandler(controller.revokeMarketAssociateSessions));
+  router.delete('/market-associates/:id', requireSuperAdmin, validateBody(deleteAccountSchema), asyncHandler(controller.deleteMarketAssociate));
   router.post('/market-associates/:id/resend-invitation', asyncHandler(controller.resendMarketAssociateInvitation));
   router.post('/market-associates/:id/cancel-invitation', validateBody(lifecycleSchema), asyncHandler(controller.cancelMarketAssociateInvitation));
 
@@ -231,6 +271,7 @@ export function createPlatformAdminRouter() {
   router.post('/market-associate-assignments/:id/end', validateBody(lifecycleSchema), asyncHandler(controller.assignmentStatus));
 
   router.get('/audit-logs', asyncHandler(controller.auditLogs));
+  router.get('/audit-logs/facets', asyncHandler(controller.auditFacets));
   router.get('/audit-logs/:id', asyncHandler(controller.auditDetail));
   router.get('/public-id-counters', asyncHandler(controller.counters));
   router.post('/public-id-counters/repair', validateBody(z.object({

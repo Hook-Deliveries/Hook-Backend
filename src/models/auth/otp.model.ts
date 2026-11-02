@@ -3,7 +3,9 @@ import { BaseEntity, createModel, createSchema } from '@models/base.model';
 export interface Otp extends BaseEntity {
   email: string;
   code: string;
-  type: 'email_verification' | 'password_reset' | 'phone_verification';
+  type: 'email_verification' | 'password_reset' | 'phone_verification' | 'account_deletion';
+  /** Wrong guesses so far; the code is burned after too many. */
+  attempts?: number;
   isUsed: boolean;
   expiresAt: Date;
   isValid: boolean;
@@ -14,6 +16,7 @@ const OtpSchema = createSchema<Otp>({
   code: { type: String, required: true },
   type: { type: String, default: 'email_verification' },
   isUsed: { type: Boolean, default: false },
+  attempts: { type: Number, default: 0 },
   expiresAt: { type: Date, required: true },
   deletedAt: { type: Date },
 });

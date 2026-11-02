@@ -14,7 +14,7 @@ export interface Order extends BaseEntity {
   fulfilmentGroupIds?: string[];
   initiatingPartnerId?: string;
   deliveryMethod?: "HOME_DELIVERY" | "PARTNER_PICKUP";
-  commercePaymentMethod?: "PREPAID" | "PAY_AT_HANDOVER";
+  commercePaymentMethod?: "PREPAID";
   commerceStatus?:
     | "AWAITING_PAYMENT"
     | "VERIFICATION_PENDING"
@@ -39,7 +39,6 @@ export interface Order extends BaseEntity {
     | "PROCESSING"
     | "CONFIRMED"
     | "FAILED"
-    | "DUE_AT_HANDOVER"
     | "REFUND_PENDING"
     | "REFUNDED";
   subtotalMinor?: number;
@@ -48,6 +47,12 @@ export interface Order extends BaseEntity {
   taxSnapshot?: Record<string, unknown>;
   deliveryFeeMinor?: number;
   deliveryPricing?: Record<string, unknown>;
+  logisticsProviderId?: string;
+  logisticsProviderSnapshot?: Record<string, unknown>;
+  couponId?: string;
+  couponCode?: string;
+  couponDiscountMinor?: number;
+  creditsAppliedMinor?: number;
   totalMinor?: number;
   currency?: string;
   customerSnapshot?: Record<string, unknown>;
@@ -57,7 +62,6 @@ export interface Order extends BaseEntity {
   timeline?: Array<Record<string, unknown>>;
   checkoutPreviewId?: string;
   idempotencyKey?: string;
-  podReview?: Record<string, unknown>;
   orderCode: string;
   userId?: string;
   guestId?: string;
@@ -132,7 +136,7 @@ const OrderSchema = createSchema<Order>({
   deliveryMethod: { type: String, enum: ["HOME_DELIVERY", "PARTNER_PICKUP"] },
   commercePaymentMethod: {
     type: String,
-    enum: ["PREPAID", "PAY_AT_HANDOVER"],
+    enum: ["PREPAID"],
     index: true,
   },
   commerceStatus: {
@@ -166,7 +170,6 @@ const OrderSchema = createSchema<Order>({
       "PROCESSING",
       "CONFIRMED",
       "FAILED",
-      "DUE_AT_HANDOVER",
       "REFUND_PENDING",
       "REFUNDED",
     ],
@@ -178,6 +181,12 @@ const OrderSchema = createSchema<Order>({
   taxSnapshot: { type: Object },
   deliveryFeeMinor: { type: Number, min: 0 },
   deliveryPricing: { type: Object },
+  logisticsProviderId: { type: String, index: true },
+  logisticsProviderSnapshot: { type: Object },
+  couponId: { type: String, index: true },
+  couponCode: { type: String, uppercase: true, index: true },
+  couponDiscountMinor: { type: Number, default: 0, min: 0 },
+  creditsAppliedMinor: { type: Number, default: 0, min: 0 },
   totalMinor: { type: Number, min: 0 },
   currency: { type: String, default: "NGN" },
   customerSnapshot: { type: Object },
@@ -187,7 +196,6 @@ const OrderSchema = createSchema<Order>({
   timeline: { type: [Object], default: [] },
   checkoutPreviewId: { type: String, unique: true, sparse: true, index: true },
   idempotencyKey: { type: String, unique: true, sparse: true },
-  podReview: { type: Object },
   orderCode: { type: String, required: true, unique: true, index: true },
   userId: { type: String, index: true },
   guestId: { type: String, index: true },
@@ -244,6 +252,9 @@ const OrderSchema = createSchema<Order>({
 });
 
 OrderSchema.index({ userId: 1, status: 1 });
+// Payment reminders and the unpaid-order expiry scan by status and age; customers list their orders newest first.
+OrderSchema.index({ commerceStatus: 1, createdAt: 1 });
+OrderSchema.index({ userId: 1, createdAt: -1 });
 OrderSchema.index({ guestId: 1, status: 1 });
 OrderSchema.index({ boothId: 1, createdAt: -1 });
 OrderSchema.index({ boothId: 1, paymentStatus: 1, status: 1 });

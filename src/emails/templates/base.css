@@ -1,18 +1,17 @@
+:root { color-scheme: light only; supported-color-schemes: light; }
 body { margin: 0; background: #f4f4f5; font-family: Arial, Helvetica, sans-serif; color: #18181b; }
-.wrap { width: 100%; padding: 0 0 40px; box-sizing: border-box; }
-.card { max-width: 600px; margin: 0 auto; background: #ffffff; box-sizing: border-box; overflow: hidden; }
+.wrap { width: 100%; padding: 40px 0; box-sizing: border-box; }
+.card { max-width: 600px; margin: 0 auto; background: #ffffff; box-sizing: border-box; overflow: hidden; border-radius: 16px; }
 
-/* Gold banner header. The angled bottom edge is progressive enhancement —
-   clients without clip-path support simply get a clean straight edge. */
-.banner { background: #FFC809; padding: 40px 40px 48px; text-align: center; -webkit-clip-path: polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%); clip-path: polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%); }
-.banner-plain { background: #FFC809; padding: 40px 40px; text-align: center; }
+/* One flat gold banner everywhere — clip-path curves silently fall back to a straight edge in Gmail, so the design never depended on it. */
+.banner, .banner-plain { background: #FFC809; padding: 40px 40px; text-align: center; }
 .brand { font-size: 32px; line-height: 1; font-weight: 800; letter-spacing: -1px; color: #18181b; }
 .brand-dot { color: #ffffff; }
 .greeting { margin-top: 22px; font-size: 15px; line-height: 1.4; color: #4a3c00; }
 .banner h1 { margin: 6px 0 0; font-size: 26px; line-height: 1.25; font-weight: 800; color: #18181b; text-align: center; }
 
 /* Body */
-.body { padding: 36px 40px 8px; }
+.body { padding: 36px 40px 40px; }
 h1 { margin: 0; text-align: center; font-size: 26px; line-height: 1.25; font-weight: 800; color: #18181b; }
 h2 { margin: 0 0 14px; font-size: 19px; line-height: 1.3; font-weight: 800; color: #18181b; }
 p { margin: 0; font-size: 14px; line-height: 1.7; color: #52525b; }
@@ -27,18 +26,23 @@ p { margin: 0; font-size: 14px; line-height: 1.7; color: #52525b; }
 
 /* Order recap */
 .panel { margin: 22px 0 0; border-top: 1px solid #e4e4e7; }
-.row { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e4e4e7; padding: 13px 0; font-size: 14px; }
+.row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; border-bottom: 1px solid #e4e4e7; padding: 13px 0; font-size: 14px; }
 .label { color: #71717a; }
 .value { color: #18181b; font-weight: 700; text-align: right; }
 .row-total { border-bottom: 0; padding-top: 16px; }
 .row-total .label, .row-total .value { font-size: 16px; font-weight: 800; color: #18181b; }
-.line-item { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; border-bottom: 1px solid #f1f1f3; padding: 13px 0; font-size: 14px; }
-.line-title { font-weight: 700; color: #18181b; flex: 1; }
-.line-qty { color: #71717a; width: 92px; }
-.line-price { font-weight: 700; color: #18181b; text-align: right; white-space: nowrap; }
+.line-item { border-bottom: 1px solid #f1f1f3; font-size: 14px; }
+.line-thumb-cell { padding: 13px 12px 13px 0; vertical-align: middle; width: 48px; }
+.line-thumb { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; display: block; border: 1px solid #f1f1f3; }
+.line-thumb-empty { display: block; width: 48px; height: 48px; border-radius: 8px; background: #f1f1f3; }
+.line-text-cell { padding: 13px 0; vertical-align: middle; }
+.line-price-cell { padding: 13px 0 13px 12px; vertical-align: middle; white-space: nowrap; }
+.line-title { font-weight: 700; color: #18181b; }
+.line-qty { color: #71717a; font-size: 13px; }
+.line-price { font-weight: 700; color: #18181b; }
 
-/* Dark information block, mirroring the banner's angle at the top. */
-.dark-block { margin-top: 34px; background: #18181b; padding: 52px 40px 40px; color: #ffffff; -webkit-clip-path: polygon(0 0, 50% 12%, 100% 0, 100% 100%, 0 100%); clip-path: polygon(0 0, 50% 12%, 100% 0, 100% 100%, 0 100%); }
+/* Dark information block. */
+.dark-block { margin-top: 34px; background: #18181b; padding: 40px; color: #ffffff; }
 .dark-block h2 { color: #ffffff; text-align: center; }
 .dark-cols { display: flex; gap: 24px; }
 .dark-col { flex: 1; }
@@ -53,14 +57,41 @@ p { margin: 0; font-size: 14px; line-height: 1.7; color: #52525b; }
 .footer-brand span { color: #FFC809; }
 
 @media (max-width: 560px) {
-  .banner, .banner-plain { padding: 32px 22px 42px; }
-  .body { padding: 28px 22px 8px; }
-  .dark-block { padding: 46px 22px 32px; }
+  .wrap { padding: 28px 0; }
+  .banner, .banner-plain { padding: 32px 22px; }
+  .body { padding: 28px 22px 32px; }
+  .dark-block { padding: 32px 22px; }
   .banner h1, h1 { font-size: 22px; }
   .code { font-size: 36px; letter-spacing: 10px; padding: 18px; }
-  .row, .line-item { display: block; }
-  .value, .line-price { text-align: left; margin-top: 4px; }
-  .line-qty { width: auto; }
   .dark-cols { display: block; }
   .dark-col + .dark-col { margin-top: 20px; }
+}
+
+/* Some clients (Gmail app, Outlook.com) recolor regardless of color-scheme meta — reassert light mode explicitly. */
+@media (prefers-color-scheme: dark) {
+  body, .wrap { background: #f4f4f5 !important; color: #18181b !important; }
+  .card { background: #ffffff !important; }
+  .banner, .banner-plain { background: #FFC809 !important; }
+  .brand { color: #18181b !important; }
+  .greeting { color: #4a3c00 !important; }
+  .banner h1, h1, h2 { color: #18181b !important; }
+  p, .lead { color: #52525b !important; }
+  .icon { background: #FFF4C7 !important; color: #7a5c00 !important; }
+  .code { background: #FFFBEB !important; border-color: #FFE9A3 !important; color: #18181b !important; }
+  .meta { color: #7a5c00 !important; }
+  .notice { background: #FFFBEB !important; border-color: #FFE9A3 !important; color: #52525b !important; }
+  .panel, .row, .line-item { border-color: #e4e4e7 !important; }
+  .label, .line-qty { color: #71717a !important; }
+  .value, .line-title, .line-price, .row-total .value { color: #18181b !important; }
+  .line-thumb-empty { background: #f1f1f3 !important; }
+  .dark-block { background: #18181b !important; color: #ffffff !important; }
+  .dark-block h2 { color: #ffffff !important; }
+  .dark-heading { color: #FFC809 !important; }
+  .dark-value { color: #d4d4d8 !important; }
+  .button { background: #FFC809 !important; color: #18181b !important; }
+  .button-light { background: #ffffff !important; color: #18181b !important; }
+  .footer { color: #71717a !important; }
+  .footer-brand { color: #18181b !important; }
+  .footer-brand span { color: #FFC809 !important; }
+  .brand-dot { color: #ffffff !important; }
 }

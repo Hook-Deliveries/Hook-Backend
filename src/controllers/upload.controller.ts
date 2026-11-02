@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { MediaService } from '@services/media.service';
+import { MediaService } from '@modules/catalog/media.service';
 import { HttpError, sendCreated } from '@utils/http';
 
 export class UploadController {

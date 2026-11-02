@@ -1,3 +1,6 @@
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
+import { onSaleFilter } from '@lib/product-availability';
+import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -5,14 +8,17 @@ import { HttpError, sendCreated, sendSuccess } from '@utils/http';
 import { adminRepos, getPagination, paginated, routeParam } from './admin.helpers';
 import { publicProduct } from '@lib/public-resource';
 import { Product } from '@models/products/product.model';
+import { recordAudit } from '@modules/platform/platform-audit.service';
+import { categoryService } from '@modules/catalog/category.service';
 import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
 import { Market } from '@models/platform/network.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
-import { hookIdFromPublicId, nextPublicId } from '@services/public-id.service';
+import { hookIdFromPublicId, nextPublicId } from '@modules/platform/public-id.service';
 import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cache';
-import { publishRealtime } from '@services/realtime.service';
+import { publishRealtime } from '@modules/platform/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { defaultNegotiationRules } from '@lib/negotiation-defaults';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -32,16 +38,27 @@ async function activeCatalogRelations(categoryIdentifier: string, marketIdentifi
     Market.findOne(referenceFilter(marketIdentifier) as any).lean({ virtuals: true }),
   ]);
   if (!category) throw new HttpError(404, 'Category not found');
-  if (!category.isActive) throw new HttpError(409, 'Select an active category', undefined, 'CONFLICT');
+  // Only an active leaf (with an active parent) may hold products.
+  await categoryService.assertAssignable((category as any)._id.toString());
   if (!market) throw new HttpError(404, 'Market not found');
   if (market.status !== 'active') throw new HttpError(409, 'Select an active Market', undefined, 'CONFLICT');
   return { category, market };
 }
 
+/** Resolves the admin-picked vendor to its internal id and confirms it belongs to the product's own market; an empty string means "no vendor" and resolves to `undefined`. */
+async function resolveSourceVendor(identifier: unknown, marketObjectId: string) {
+  const value = String(identifier ?? '').trim();
+  if (!value) return undefined;
+  const vendor = await MarketVendor.findOne(referenceFilter(value) as any).lean({ virtuals: true });
+  if (!vendor) throw new HttpError(404, 'Vendor not found', undefined, 'NOT_FOUND');
+  if (String(vendor.marketId) !== String(marketObjectId)) {
+    throw new HttpError(409, 'Select a vendor that belongs to this product\'s Market', undefined, 'CONFLICT');
+  }
+  return vendor._id.toString();
+}
+
 async function availabilityDeadline() {
-  const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
-  const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
-  return new Date(Date.now() + days * 86_400_000);
+  return availabilityValidUntil(new Date());
 }
 
 function publishProductUpdate(product: any) {
@@ -59,7 +76,6 @@ function assertAdminPublishReady(product: Record<string, any>) {
   const missing: string[] = [];
   if (!String(product.description || '').trim() || String(product.description).trim().length < 20) missing.push('description');
   if (!Array.isArray(product.images) || !product.images.length) missing.push('images');
-  if (Number(product.quantity || 0) < 1) missing.push('quantity');
   if (Number(product.costPrice || 0) <= 0) missing.push('costPrice');
   if (Number(product.sellingPrice || 0) <= 0) missing.push('sellingPrice');
   if (missing.length) {
@@ -110,6 +126,25 @@ async function categoryManagersMap(): Promise<Map<string, any[]>> {
 }
 
 export class AdminProductsController {
+  /** Moves products into a new category in one step, clearing their "needs a sub-category" flag. */
+  recategorise = async (req: Request, res: Response) => {
+    const ids: string[] = req.body.productIds;
+    const category = await categoryService.assertAssignable(String(req.body.categoryId));
+    const internal = ids.filter((id) => /^[a-f\d]{24}$/i.test(id));
+    const filter = { deletedAt: { $exists: false }, $or: [{ _id: { $in: internal } }, { publicId: { $in: ids } }] };
+    const result = await Product.updateMany(filter, { $set: { categoryId: category._id.toString() }, $unset: { needsRecategorisation: 1 } });
+    await recordAudit(req, {
+      action: 'products.recategorise',
+      entityType: 'product',
+      after: { categoryId: category._id.toString(), count: result.modifiedCount },
+      reason: `Moved ${result.modifiedCount} product(s) to ${category.name}`,
+    });
+    publishRealtime({ type: 'catalog.updated', entityType: 'category', entityId: category.publicId }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'category', entityId: category.publicId }, { public: true, admin: true });
+    adminProductStatsCache.clear();
+    sendSuccess(res, { moved: result.modifiedCount, category: { publicId: category.publicId, name: category.name } });
+  };
+
   reviewQueue = async (req: Request, res: Response) => {
     const { page, limit, skip } = getPagination(req.query);
     const [data, total] = await adminRepos.products().findAndCount({
@@ -127,17 +162,37 @@ export class AdminProductsController {
     const search = typeof req.query.search === 'string' ? req.query.search.toLowerCase() : undefined;
     const where: Record<string, any> = { deletedAt: { $exists: false } };
     if (typeof req.query.status === 'string') where.status = req.query.status;
-    if (typeof req.query.categoryId === 'string') where.categoryId = req.query.categoryId;
-    if (req.query.stock === 'low') where.quantity = { $gt: 0, $lt: 10 };
-    if (req.query.stock === 'out') where.quantity = 0;
+    if (typeof req.query.categoryId === 'string') where.categoryId = { $in: await categoryService.descendantIds(req.query.categoryId) };
+    if (req.query.needsRecategorisation === 'true') where.needsRecategorisation = true;
+    // Availability is a verification window, not a stock count, so the list filters on where that window stands.
+    const now = new Date();
+    if (req.query.availability === 'available') Object.assign(where, onSaleFilter(now));
+    if (req.query.availability === 'recheck') {
+      where.$and = [...(where.$and || []), { $or: [
+        { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
+      ] }];
+    }
+    if (req.query.availability === 'unavailable') where.availabilityStatus = ProductAvailabilityStatus.UNAVAILABLE;
+    if (typeof req.query.marketId === 'string' && req.query.marketId) {
+      const market: any = await Market.findOne(referenceFilter(req.query.marketId) as any).select('_id').lean();
+      where.marketId = market ? String(market._id) : '__none__';
+    }
+    if (typeof req.query.source === 'string' && ['field_agent', 'admin', 'partner', 'vendor'].includes(req.query.source)) where.source = req.query.source;
+    if (req.query.negotiable === 'true') where['negotiationRules.enabled'] = true;
     if (search) {
       const expression = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       where.$or = [{ title: expression }, { hookId: expression }, { publicId: expression }];
     }
-    const listFields = 'publicId hookId title slug description costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency quantity reservedQuantity colors sizes images status categoryId marketId sourceStateId availabilityStatus vendorId source viewCount orderCount averageRating createdAt updatedAt';
+    // Rows in a dense table do not need the long description; the whole list can be 100 rows.
+    const summary = req.query.fields === 'summary';
+    const SORTABLE: Record<string, string> = { createdAt: 'createdAt', updatedAt: 'updatedAt', title: 'title', sellingPrice: 'sellingPriceMinor', orderCount: 'orderCount', viewCount: 'viewCount' };
+    const sortField = SORTABLE[String(req.query.sort || 'createdAt')] || 'createdAt';
+    const sortDir = req.query.dir === 'asc' ? 1 : -1;
+    const listFields = (summary ? '' : 'description ') + 'publicId hookId title slug costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency colors sizes images status categoryId marketId sourceStateId availabilityStatus availabilityValidUntil lastAvailabilityConfirmedAt internalSellerReference vendorId source viewCount orderCount averageRating createdAt updatedAt';
     const productsQuery = Product.find(where)
       .select(listFields)
-      .sort({ createdAt: -1 })
+      .sort({ [sortField]: sortDir, _id: -1 })
       .skip(skip)
       .limit(limit)
       .lean({ virtuals: true });
@@ -155,7 +210,7 @@ export class AdminProductsController {
             { publicId: { $in: categoryIds } },
             ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
           ],
-        }).select('publicId name slug iconUrl').lean({ virtuals: true })
+        }).select('publicId name slug iconUrl parentId').lean({ virtuals: true })
       : [];
     const categoryMap = new Map<string, any>();
     (categories as any[]).forEach((category) => {
@@ -167,9 +222,19 @@ export class AdminProductsController {
       categoryMap.set(String(_id), value);
       if (category.publicId) categoryMap.set(String(category.publicId), value);
     });
+    // One batch each for parent categories and markets, run concurrently since neither depends on the other.
+    const parentIds = [...new Set((categories as any[]).map((category) => String(category.parentId || '')).filter(Boolean))];
+    const marketIds = [...new Set((rows as any[]).map((product) => String(product.marketId || '')).filter((value) => /^[a-f\d]{24}$/i.test(value)))];
+    const [parents, marketRows] = await Promise.all([
+      parentIds.length ? Category.find({ _id: { $in: parentIds.filter((value) => /^[a-f\d]{24}$/i.test(value)) } }).select('name').lean() : [],
+      marketIds.length ? Market.find({ _id: { $in: marketIds } }).select('name').lean() : [],
+    ]);
+    const parentName = new Map((parents as any[]).map((parent) => [String(parent._id), parent.name]));
+    const marketName = new Map((marketRows as any[]).map((market) => [String(market._id), market.name]));
     const data = (rows as any[]).map((product) => ({
       ...product,
-      category: categoryMap.get(String(product.categoryId)) || null,
+      marketName: marketName.get(String(product.marketId)) || null,
+      category: categoryMap.get(String(product.categoryId)) ? { ...categoryMap.get(String(product.categoryId)), parentName: parentName.get(String((categories as any[]).find((row) => String(row._id) === String(product.categoryId) || row.publicId === String(product.categoryId))?.parentId || '')) || null } : null,
       managers: managers.get(String(product.categoryId)) || [],
     }));
     sendSuccess(res, { ...paginated(data.map(adminProductSummary), total, page, limit), stats });
@@ -194,8 +259,14 @@ export class AdminProductsController {
         ? MarketVendor.findOne(referenceFilter(product.sourceMarketVendorId) as any).select('publicId businessName status').lean({ virtuals: true })
         : null,
     ]);
+    const parentCategory = product.category?.parentId
+      ? await Category.findById(product.category.parentId).select('name publicId').lean()
+      : null;
     sendSuccess(res, publicProduct({
       ...product,
+      category: product.category && parentCategory
+        ? { ...(typeof product.category.toJSON === 'function' ? product.category.toJSON() : product.category), parent: { id: String(parentCategory._id), name: parentCategory.name } }
+        : product.category,
       categoryManagers: managers.get(product.categoryId) || [],
       sourceMarket: sourceMarket
         ? { publicId: sourceMarket.publicId, name: sourceMarket.name, address: sourceMarket.address }
@@ -211,22 +282,29 @@ export class AdminProductsController {
     const { category, market } = await activeCatalogRelations(req.body.categoryId, req.body.marketId);
     const body = { ...req.body };
     delete body.vendorId;
-    // Both identifiers come from the same reserved sequence: publicId is the
-    // durable internal key, hookId the human-facing alias shown in the UI.
+    // Both identifiers come from the same reserved sequence: publicId is the durable internal key, hookId the human-facing alias.
     const productPublicId = await nextPublicId('product');
     const isPublished = body.status === ProductStatus.PUBLISHED;
     if (isPublished) assertAdminPublishReady(body);
     const now = new Date();
+    const basePriceMinor = Math.round(Number(body.costPrice) * 100);
+    const sellingPriceMinor = Math.round(Number(body.sellingPrice) * 100);
+    const negotiationRules = defaultNegotiationRules({
+      sellingPriceMinor,
+      basePriceMinor,
+      minAcceptablePriceMinor: Math.round(Number(body.minAcceptablePrice) * 100),
+    });
     const product = await products.save(products.create({
       ...body,
       categoryId: category._id.toString(),
       marketId: market._id.toString(),
       sourceStateId: market.stateId,
-      basePriceMinor: Math.round(Number(body.costPrice) * 100),
-      sellingPriceMinor: Math.round(Number(body.sellingPrice) * 100),
+      basePriceMinor,
+      sellingPriceMinor,
       discountMinor: body.discountedPrice ? Math.max(0, Math.round((Number(body.sellingPrice) - Number(body.discountedPrice)) * 100)) : 0,
       currency: 'NGN',
       catalogVersion: 1,
+      ...(negotiationRules ? { negotiationRules } : {}),
       ...(isPublished ? {
         availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
         publishedAt: now,
@@ -256,11 +334,25 @@ export class AdminProductsController {
     const updates = { ...req.body };
     delete updates.vendorId;
     delete updates.source;
+    delete updates.reason;
     updates.categoryId = category._id.toString();
     updates.marketId = market._id.toString();
     updates.sourceStateId = market.stateId;
+    // Only touch the vendor link if the field was actually sent — omitting it leaves the existing vendor as-is.
+    if ('sourceMarketVendorId' in req.body) {
+      updates.sourceMarketVendorId = await resolveSourceVendor(req.body.sourceMarketVendorId, market._id.toString());
+    }
     if (updates.costPrice !== undefined) updates.basePriceMinor = Math.round(Number(updates.costPrice) * 100);
     if (updates.sellingPrice !== undefined) updates.sellingPriceMinor = Math.round(Number(updates.sellingPrice) * 100);
+    // Only fill in a default when negotiation isn't already configured — never override rules an admin set explicitly.
+    if (!product.negotiationRules?.enabled) {
+      const negotiationRules = defaultNegotiationRules({
+        sellingPriceMinor: updates.sellingPriceMinor ?? product.sellingPriceMinor,
+        basePriceMinor: updates.basePriceMinor ?? product.basePriceMinor,
+        minAcceptablePriceMinor: Math.round(Number(updates.minAcceptablePrice ?? product.minAcceptablePrice) * 100),
+      });
+      if (negotiationRules) updates.negotiationRules = negotiationRules;
+    }
     const nextStatus = updates.status || product.status;
     if (nextStatus === ProductStatus.PUBLISHED) assertAdminPublishReady({ ...product, ...updates });
     if (nextStatus === ProductStatus.PUBLISHED && product.status !== ProductStatus.PUBLISHED) {
@@ -275,11 +367,17 @@ export class AdminProductsController {
       });
     }
     updates.catalogVersion = Number(product.catalogVersion || 1) + 1;
+    const priceFieldsChanged = (['costPrice', 'sellingPrice', 'discountedPrice', 'minAcceptablePrice'] as const)
+      .some((key) => updates[key] !== undefined && Number(updates[key]) !== Number(product[key] ?? undefined));
+    if (priceFieldsChanged && !String(req.body.reason || '').trim())
+      throw new HttpError(400, 'A reason is required when changing product pricing', undefined, 'VALIDATION_ERROR');
+    const before = { quantity: product.quantity, sellingPriceMinor: product.sellingPriceMinor };
     Object.assign(product, updates);
     if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
     await products.save(product);
-    await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body) });
+    await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body), reason: req.body.reason });
     publishProductUpdate(product);
+    void notifyLikersOfProductChange(before, product as any).catch(() => undefined);
     sendSuccess(res, publicProduct(await products.findOne({ where: { id: product.id }, relations: { category: true } }) as any));
   };
 
@@ -327,13 +425,7 @@ export class AdminProductsController {
     sendSuccess(res, publicProduct(product as any));
   };
 
-  /**
-   * Soft delete only — a Product's id is still referenced by historical
-   * OrderItems/Negotiations, so the document is kept and just hidden from
-   * every admin/public query via deletedAt. Only allowed once a product is
-   * already Disabled, so nothing live or customer-visible can be deleted
-   * out from under an active listing.
-   */
+  /** Soft delete only, since a Product's id is still referenced by historical OrderItems/Negotiations; only allowed once the product is already Disabled. */
   remove = async (req: Request, res: Response) => {
     const products = adminRepos.products();
     const product = await products.findOne({ where: { id: routeParam(req.params.id) } });
@@ -351,13 +443,17 @@ export class AdminProductsController {
     const cached = adminProductStatsCache.get('summary');
     if (cached) return cached;
     const products = adminRepos.products();
-    const [total, approved, pendingApproval, lowStock, soldOut] = await Promise.all([
+    const now = new Date();
+    const [total, approved, pendingApproval, needsRecheck, unavailable] = await Promise.all([
       products.count(),
       products.count({ where: { status: ProductStatus.APPROVED } }),
       products.count({ where: { status: ProductStatus.PENDING_APPROVAL } }),
-      products.model.countDocuments({ quantity: { $gt: 0, $lt: 10 } }),
-      products.count({ where: { status: ProductStatus.SOLD_OUT } }),
+      products.model.countDocuments({ deletedAt: { $exists: false }, $or: [
+        { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
+      ] }),
+      products.model.countDocuments({ deletedAt: { $exists: false }, availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE }),
     ]);
-    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, lowStock, soldOut });
+    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, needsRecheck, unavailable });
   }
 }
