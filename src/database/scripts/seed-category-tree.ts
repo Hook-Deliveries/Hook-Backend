@@ -5,8 +5,10 @@ import { CATEGORY_TREE, type CategoryNode } from '../category-tree';
 
 /**
  * Creates (or brings up to date) the Hook category tree and each category's
- * product attribute template. Safe to re-run: categories are matched by slug,
- * sizing-guide data is preserved, and nothing is deleted.
+ * product attribute template. Safe to re-run: categories are matched by slug and
+ * nothing is deleted. A category that already exists only has its attribute
+ * template refreshed; its name, description, sort order, visibility and any
+ * sizing guide an admin edited stay as they are. Those are only set on create.
  *   npm run seed:categories               (dry run)
  *   npm run seed:categories -- --execute
  */
@@ -37,8 +39,10 @@ async function upsert(node: CategoryNode, parent: { id: string; slug: string } |
     attributeSchema,
   };
   if (existing) {
-    console.log(`  update  ${parent ? '   ' : ''}${node.name}`);
-    if (execute) await Category.updateOne({ _id: existing._id }, { $set: fields, ...(parent ? {} : { $unset: { parentId: 1 } }) });
+    const current = JSON.stringify((existing.attributeSchema as Record<string, unknown> | undefined) || {});
+    const changed = current !== JSON.stringify(attributeSchema);
+    console.log(`  ${changed ? 'update ' : 'ok     '} ${parent ? '   ' : ''}${node.name}`);
+    if (execute && changed) await Category.updateOne({ _id: existing._id }, { $set: { attributeSchema } });
     return { id: existing._id.toString(), slug };
   }
   console.log(`  create  ${parent ? '   ' : ''}${node.name}`);

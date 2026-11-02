@@ -3,6 +3,7 @@ import {
   ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
+import { isOnSale, onSaleFilter } from "@lib/product-availability";
 import type { MongoRepository as Repository } from "@lib/mongo-repository";
 import { Cart } from "@models/cart/cart.model";
 import { CartItem } from "@models/cart/cart-item.model";
@@ -113,13 +114,7 @@ export class CartService {
     const [product, existingCart] = await Promise.all([
       Product.findOne({
         ...identifierFilter(productIdentifier),
-        status: ProductStatus.PUBLISHED,
-        availabilityStatus: {
-          $in: [
-            ProductAvailabilityStatus.AVAILABLE,
-            ProductAvailabilityStatus.LIMITED,
-          ],
-        },
+        ...onSaleFilter(),
         deletedAt: null,
       })
         .select(
@@ -383,9 +378,9 @@ export class CartService {
       .lean();
     if (!item) throw new HttpError(404, "Cart item not found");
     const product = await Product.findById(item.productId)
-      .select("status availabilityStatus sellingPriceMinor discountMinor")
+      .select("status availabilityStatus availabilityValidUntil sellingPriceMinor discountMinor")
       .lean();
-    if (!product || product.status !== ProductStatus.PUBLISHED || ![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus || ProductAvailabilityStatus.UNCONFIRMED))
+    if (!product || !isOnSale(product))
       throw new HttpError(
         409,
         "Product is no longer available",
@@ -548,9 +543,7 @@ export class CartService {
     const enriched = items.map((item) => {
       const product = productMap.get(item.productId);
       const blockingReasons: string[] = [];
-      if (!product || product.status !== ProductStatus.PUBLISHED)
-        blockingReasons.push("RUNNER_CONFIRMATION_REQUIRED");
-      else if (![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(product.availabilityStatus || ProductAvailabilityStatus.UNCONFIRMED))
+      if (!product || !isOnSale(product))
         blockingReasons.push("RUNNER_CONFIRMATION_REQUIRED");
       if (product && product.catalogVersion !== item.productVersion)
         blockingReasons.push("PRODUCT_CHANGED");

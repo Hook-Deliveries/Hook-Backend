@@ -3,13 +3,17 @@ import { HttpError } from '@utils/http';
 
 const googleClient = new OAuth2Client();
 
-/** The native Google Sign-In SDK issues ID tokens audienced to the Web client ID, not the platform one, so the web client must be accepted alongside iOS/Android for mobile sign-in to verify. */
+
 function configuredAudiences() {
+
   return [
     process.env.GOOGLE_WEB_CLIENT_ID,
     process.env.GOOGLE_IOS_CLIENT_ID,
     process.env.GOOGLE_ANDROID_CLIENT_ID,
-  ].filter(Boolean) as string[];
+  ]
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 export async function verifyGoogleIdToken(idToken: string): Promise<TokenPayload> {
@@ -33,6 +37,7 @@ export async function verifyGoogleIdToken(idToken: string): Promise<TokenPayload
     return payload;
   } catch (error) {
     if (error instanceof HttpError) throw error;
+    console.warn('[google-auth] token rejected:', error instanceof Error ? error.message : error);
     throw new HttpError(401, 'Google sign-in could not be verified');
   }
 }

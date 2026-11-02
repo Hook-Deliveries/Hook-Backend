@@ -299,7 +299,7 @@ const sizingGuideSchema = z.object({
   enabled: z.boolean().optional(),
   summary: z.string().max(200).optional(),
   howToMeasure: z.string().max(2000).optional(),
-  presetGroups: z.array(z.enum(['clothing', 'shoes', 'kids-shoes', 'bra', 'general'])).max(5).default([]),
+  presetGroups: z.array(z.enum(['clothing', 'uk-dress', 'shoes', 'kids-shoes', 'bra', 'general'])).max(5).default([]),
   chart: z.array(z.object({
     size: z.string().min(1).max(40),
     measurements: z.record(z.string(), z.string().max(60)).default({}),
@@ -312,7 +312,7 @@ export const categoryAttributeSchema = z.object({
   type: z.enum(['size', 'colour', 'select', 'text']),
   required: z.boolean(),
   options: z.array(z.string().trim().min(1).max(60)).max(60).optional(),
-  preset: z.enum(['clothing', 'shoes', 'kids-shoes', 'bra', 'general']).optional(),
+  preset: z.enum(['clothing', 'uk-dress', 'shoes', 'kids-shoes', 'bra', 'general']).optional(),
   variantAxis: z.boolean(),
 }).strict();
 

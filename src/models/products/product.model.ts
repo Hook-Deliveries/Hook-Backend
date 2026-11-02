@@ -7,6 +7,8 @@ export interface Product extends BaseEntity {
   sourceSubmissionId?: string;
   sourceMarketVendorId?: string;
   sourceMarketAssociateId?: string;
+  /** Supplier id and name the product was captured from, for staff only. */
+  internalSellerReference?: string;
   marketId?: string;
   sourceStateId?: string;
   title: string;
@@ -77,6 +79,7 @@ const ProductSchema = createSchema<Product>({
   sourceSubmissionId: { type: String, unique: true, sparse: true, index: true },
   sourceMarketVendorId: { type: String, index: true, sparse: true },
   sourceMarketAssociateId: { type: String, index: true, sparse: true },
+  internalSellerReference: { type: String, maxlength: 300 },
   marketId: { type: String, index: true, sparse: true },
   sourceStateId: { type: String, index: true, sparse: true },
   title: { type: String, required: true, trim: true },

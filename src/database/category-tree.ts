@@ -1,5 +1,5 @@
 import type { CategoryAttribute, SizePreset } from '@models/categories/category.model';
-import { BRA_GUIDE, CLOTHING_GUIDE, KIDS_SHOE_GUIDE, SHOE_GUIDE, type SeedSizingGuide } from './sizing-guides';
+import { BRA_GUIDE, CLOTHING_GUIDE, KIDS_SHOE_GUIDE, SHOE_GUIDE, UK_DRESS_GUIDE, type SeedSizingGuide } from './sizing-guides';
 
 /**
  * The Hook category tree and what a product in each category asks for.
@@ -21,6 +21,12 @@ const size = (label: string, preset: SizePreset, required = true): CategoryAttri
 const select = (key: string, label: string, options: string[], required = true, variantAxis = true): CategoryAttribute => ({ key, label, type: 'select', required, options, variantAxis });
 const text = (key: string, label: string, required = true, variantAxis = true): CategoryAttribute => ({ key, label, type: 'text', required, variantAxis });
 
+const watchAttributes = (colourLabel: string): CategoryAttribute[] => [
+  colour(colourLabel),
+  select('caseSize', 'Case size', ['34 mm', '36 mm', '38 mm', '40 mm', '42 mm', '44 mm', '46 mm'], false),
+];
+// Handbags are sold by size name, backpacks by capacity, so one list covers both.
+const BAG_SIZES = ['One size', 'Mini', 'Small', 'Medium', 'Large', '16 L', '22 L', '28 L'];
 const shoeSize = () => size('Shoe size', 'shoes');
 const clothingSize = () => size('Size', 'clothing');
 const gender = () => select('gender', 'Gender', ['Male', 'Female'], true, true);
@@ -28,7 +34,7 @@ const gender = () => select('gender', 'Gender', ['Male', 'Female'], true, true);
 export const CATEGORY_TREE: CategoryNode[] = [
   { name: 'Wigs', description: 'Wigs and hair pieces', attributes: [
     select('length', 'Length', ['8"', '10"', '12"', '14"', '16"', '18"', '20"', '22"', '24"', '26"', '28"', '30"']),
-    select('texture', 'Texture', ['Straight', 'Body wave', 'Deep wave', 'Curly', 'Kinky']),
+    select('texture', 'Texture', ['Straight', 'Body wave', 'Deep wave', 'Wavy', 'Curly', 'Kinky']),
     colour(),
   ] },
   { name: 'Shoes', description: 'Sneakers, corporate shoes, slides and sandals', attributes: [shoeSize(), colour()], sizingPresets: ['shoes'], sizingGuide: SHOE_GUIDE, children: [
@@ -37,13 +43,17 @@ export const CATEGORY_TREE: CategoryNode[] = [
     { name: 'Slides male' }, { name: 'Slides female' },
     { name: 'Sandals male' }, { name: 'Sandals female' },
   ] },
-  { name: 'Bags', description: 'Bags for men and women', attributes: [colour(), select('size', 'Size', ['Small', 'Medium', 'Large'], false)], children: [
+  { name: 'Bags', description: 'Bags for men and women', attributes: [colour(), select('size', 'Size', BAG_SIZES, false)], children: [
     { name: 'Male bags' }, { name: 'Female bags' },
   ] },
-  { name: 'Watch', description: 'Watches', attributes: [colour('Colour')], children: [
-    { name: 'Leather watches' }, { name: 'Chain watches' }, { name: 'Rubber strap watches' },
+  // A watch is told apart by what you wear (strap or band colour) and its case size. The case size is optional because
+  // many stalls carry a single size per model.
+  { name: 'Watch', description: 'Watches', attributes: watchAttributes('Strap colour'), children: [
+    { name: 'Leather watches', attributes: watchAttributes('Strap colour') },
+    { name: 'Chain watches', attributes: watchAttributes('Band colour') },
+    { name: 'Rubber strap watches', attributes: watchAttributes('Strap colour') },
   ] },
-  { name: 'Glasses', description: 'Frames and sunglasses. No sizes.', attributes: [colour('Frame colour')], children: [
+  { name: 'Glasses', description: 'Frames and sunglasses', attributes: [colour('Frame colour'), select('size', 'Frame size', ['One size', '48 mm', '50 mm', '52 mm', '54 mm', '56 mm'], false)], children: [
     { name: 'Female glasses' }, { name: 'Male glasses' }, { name: 'Clear glasses' }, { name: 'Sun shades' },
   ] },
   { name: 'Children', description: 'Children shoes and bags', children: [
@@ -58,7 +68,7 @@ export const CATEGORY_TREE: CategoryNode[] = [
     { name: 'Jerseys', attributes: [clothingSize(), colour()], sizingPresets: ['clothing'], sizingGuide: CLOTHING_GUIDE },
     { name: 'Yoga mats', attributes: [select('thickness', 'Thickness', ['4 mm', '6 mm', '8 mm'], false), colour()] },
     { name: 'Sportswear', attributes: [clothingSize(), colour()], sizingPresets: ['clothing'], sizingGuide: CLOTHING_GUIDE },
-    { name: 'Fitness accessories', attributes: [text('type', 'Type', false), colour('Colour', false)] },
+    { name: 'Fitness accessories', attributes: [text('type', 'Type', false), text('size', 'Size', false), colour('Colour', false)] },
   ] },
   { name: 'Underwear', description: 'Boxers, bras, singlets and socks', children: [
     { name: 'Boxers', attributes: [clothingSize(), colour()], sizingPresets: ['clothing'], sizingGuide: CLOTHING_GUIDE },
@@ -67,7 +77,9 @@ export const CATEGORY_TREE: CategoryNode[] = [
     { name: 'Socks', attributes: [select('sizeRange', 'Size range', ['36 - 40', '41 - 45']), select('pack', 'Pack size', ['1 pair', '3 pairs', '6 pairs', '12 pairs'], false), colour()] },
   ] },
   { name: 'Clothing', description: 'Dresses and jackets', attributes: [clothingSize(), colour()], sizingPresets: ['clothing'], sizingGuide: CLOTHING_GUIDE, children: [
-    { name: 'Dresses' }, { name: 'Jackets' },
+    // Dresses are sold in UK sizes; jackets keep the letter sizes of the parent.
+    { name: 'Dresses', attributes: [size('Size', 'uk-dress'), colour()], sizingPresets: ['uk-dress'], sizingGuide: UK_DRESS_GUIDE },
+    { name: 'Jackets' },
   ] },
   { name: 'Fabrics', description: 'Fabrics sold by the yard', attributes: [select('yards', 'Length', ['2 yards', '5 yards', '6 yards', '12 yards']), colour('Colour or pattern')], children: [
     { name: 'Adire' }, { name: 'Lace' }, { name: 'Other types of fabric' },
@@ -85,6 +97,7 @@ export const CATEGORY_TREE: CategoryNode[] = [
 
 export const SIZE_PRESETS: Record<SizePreset, string[]> = {
   clothing: ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'],
+  'uk-dress': ['6', '8', '10', '12', '14', '16', '18'],
   shoes: ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46'],
   'kids-shoes': ['20', '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', '31', '32', '33', '34', '35'],
   bra: ['32A', '32B', '32C', '34A', '34B', '34C', '34D', '36B', '36C', '36D', '38C', '38D', '40C', '40D'],

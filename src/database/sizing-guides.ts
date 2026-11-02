@@ -8,7 +8,7 @@ export interface SeedSizingGuide {
   enabled: boolean;
   summary: string;
   howToMeasure: string;
-  presetGroups: Array<'clothing' | 'shoes' | 'kids-shoes' | 'bra' | 'general'>;
+  presetGroups: Array<'clothing' | 'uk-dress' | 'shoes' | 'kids-shoes' | 'bra' | 'general'>;
   chart: Array<{ size: string; measurements: Record<string, string> }>;
 }
 
@@ -45,6 +45,17 @@ export const CLOTHING_GUIDE: SeedSizingGuide = {
     ['XS', '82 - 87', '66 - 71'], ['S', '88 - 93', '72 - 77'], ['M', '94 - 99', '78 - 83'], ['L', '100 - 105', '84 - 89'],
     ['XL', '106 - 111', '90 - 95'], ['2XL', '112 - 119', '96 - 103'], ['3XL', '120 - 127', '104 - 111'],
   ].map(([size, chest, waist]) => ({ size, measurements: { Chest: `${chest} cm`, Waist: `${waist} cm` } })),
+};
+
+export const UK_DRESS_GUIDE: SeedSizingGuide = {
+  enabled: true,
+  summary: 'UK dress sizes with approximate body measurements in centimetres. If you are between sizes, choose the larger one.',
+  howToMeasure: 'Measure around the fullest part of your bust, your natural waist (the narrowest part of your torso) and the fullest part of your hips, keeping the tape snug but not tight.',
+  presetGroups: ['uk-dress'],
+  chart: [
+    ['6', '80', '62', '87'], ['8', '84', '66', '91'], ['10', '88', '70', '95'], ['12', '92', '74', '99'],
+    ['14', '97', '79', '104'], ['16', '102', '84', '109'], ['18', '107', '89', '114'],
+  ].map(([size, bust, waist, hips]) => ({ size, measurements: { Bust: `${bust} cm`, Waist: `${waist} cm`, Hips: `${hips} cm` } })),
 };
 
 export const BRA_GUIDE: SeedSizingGuide = {

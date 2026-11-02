@@ -112,3 +112,44 @@ test('a variant may not carry a detail the category does not ask for', async () 
   // Empty values are ignored, not treated as a stray detail.
   await assert.doesNotReject(() => categoryService.validateVariants(powerbank, [{ colour: 'Black', attributes: { capacity: '10,000 mAh', phoneModel: '' } }]));
 });
+
+test('watches take a colour and an optional case size, and refuse a clothing size', async () => {
+  const leather = await bySlug('watch-leather-watches');
+  const attributes = await categoryService.attributesFor(leather);
+  assert.deepEqual(attributes.map((attribute) => attribute.key), ['colour', 'caseSize']);
+  assert.equal(attributes.find((attribute) => attribute.key === 'caseSize')?.required, false);
+  await assert.doesNotReject(() => categoryService.validateVariants(leather, [{ colour: 'Black', attributes: {} }]));
+  await assert.doesNotReject(() => categoryService.validateVariants(leather, [{ colour: 'Black', attributes: { caseSize: '42 mm' } }]));
+  await rejectsWith(() => categoryService.validateVariants(leather, [{ colour: 'Black', attributes: { caseSize: '99 mm' } }]), /Case size must be one of/);
+  await rejectsWith(() => categoryService.validateVariants(leather, [{ size: 'M', colour: 'Black', attributes: {} }]), /does not use sizes/);
+});
+
+test('shoes only take shoe sizes, never a clothing size', async () => {
+  const sneakers = await bySlug('shoes-sneakers-male');
+  await assert.doesNotReject(() => categoryService.validateVariants(sneakers, [{ size: '42', colour: 'Black', attributes: {} }]));
+  await rejectsWith(() => categoryService.validateVariants(sneakers, [{ size: 'M', colour: 'Black', attributes: {} }]), /Shoe size must be one of/);
+  await rejectsWith(() => categoryService.validateVariants(sneakers, [{ size: '30', colour: 'Black', attributes: {} }]), /Shoe size must be one of/);
+});
+
+test('dresses are sold in UK sizes, jackets in letter sizes, and XXL counts as 2XL', async () => {
+  const dresses = await bySlug('clothing-dresses');
+  await assert.doesNotReject(() => categoryService.validateVariants(dresses, [{ size: '12', colour: 'Red', attributes: {} }]));
+  await rejectsWith(() => categoryService.validateVariants(dresses, [{ size: 'M', colour: 'Red', attributes: {} }]), /Size must be one of/);
+  const jackets = await bySlug('clothing-jackets');
+  await assert.doesNotReject(() => categoryService.validateVariants(jackets, [{ size: 'XXL', colour: 'Black', attributes: {} }]));
+  await assert.doesNotReject(() => categoryService.validateVariants(jackets, [{ size: '2XL', colour: 'Black', attributes: {} }]));
+  await rejectsWith(() => categoryService.validateVariants(jackets, [{ size: '12', colour: 'Black', attributes: {} }]), /Size must be one of/);
+});
+
+test('bags take names or litres, glasses an optional frame size, and fitness accessories a free size', async () => {
+  const bag = await bySlug('bags-male-bags');
+  await assert.doesNotReject(() => categoryService.validateVariants(bag, [{ size: '22 L', colour: 'Black', attributes: {} }]));
+  await assert.doesNotReject(() => categoryService.validateVariants(bag, [{ size: 'One size', colour: 'Black', attributes: {} }]));
+  const glasses = await bySlug('glasses-sun-shades');
+  await assert.doesNotReject(() => categoryService.validateVariants(glasses, [{ size: '52 mm', colour: 'Black', attributes: {} }]));
+  await assert.doesNotReject(() => categoryService.validateVariants(glasses, [{ colour: 'Black', attributes: {} }]));
+  const accessories = await bySlug('sports-and-fitness-fitness-accessories');
+  await assert.doesNotReject(() => categoryService.validateVariants(accessories, [{ size: '56 cm', colour: 'Black', attributes: { type: 'Helmet' } }]));
+  const wigs = await bySlug('wigs');
+  await assert.doesNotReject(() => categoryService.validateVariants(wigs, [{ colour: 'Blonde', attributes: { length: '14"', texture: 'Wavy' } }]));
+});

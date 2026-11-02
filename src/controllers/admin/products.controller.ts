@@ -1,3 +1,5 @@
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
+import { onSaleFilter } from '@lib/product-availability';
 import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
@@ -56,9 +58,7 @@ async function resolveSourceVendor(identifier: unknown, marketObjectId: string) 
 }
 
 async function availabilityDeadline() {
-  const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
-  const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
-  return new Date(Date.now() + days * 86_400_000);
+  return availabilityValidUntil(new Date());
 }
 
 function publishProductUpdate(product: any) {
@@ -76,7 +76,6 @@ function assertAdminPublishReady(product: Record<string, any>) {
   const missing: string[] = [];
   if (!String(product.description || '').trim() || String(product.description).trim().length < 20) missing.push('description');
   if (!Array.isArray(product.images) || !product.images.length) missing.push('images');
-  if (Number(product.quantity || 0) < 1) missing.push('quantity');
   if (Number(product.costPrice || 0) <= 0) missing.push('costPrice');
   if (Number(product.sellingPrice || 0) <= 0) missing.push('sellingPrice');
   if (missing.length) {
@@ -165,8 +164,16 @@ export class AdminProductsController {
     if (typeof req.query.status === 'string') where.status = req.query.status;
     if (typeof req.query.categoryId === 'string') where.categoryId = { $in: await categoryService.descendantIds(req.query.categoryId) };
     if (req.query.needsRecategorisation === 'true') where.needsRecategorisation = true;
-    if (req.query.stock === 'low') where.quantity = { $gt: 0, $lt: 10 };
-    if (req.query.stock === 'out') where.quantity = 0;
+    // Availability is a verification window, not a stock count, so the list filters on where that window stands.
+    const now = new Date();
+    if (req.query.availability === 'available') Object.assign(where, onSaleFilter(now));
+    if (req.query.availability === 'recheck') {
+      where.$and = [...(where.$and || []), { $or: [
+        { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
+      ] }];
+    }
+    if (req.query.availability === 'unavailable') where.availabilityStatus = ProductAvailabilityStatus.UNAVAILABLE;
     if (typeof req.query.marketId === 'string' && req.query.marketId) {
       const market: any = await Market.findOne(referenceFilter(req.query.marketId) as any).select('_id').lean();
       where.marketId = market ? String(market._id) : '__none__';
@@ -179,10 +186,10 @@ export class AdminProductsController {
     }
     // Rows in a dense table do not need the long description; the whole list can be 100 rows.
     const summary = req.query.fields === 'summary';
-    const SORTABLE: Record<string, string> = { createdAt: 'createdAt', updatedAt: 'updatedAt', title: 'title', sellingPrice: 'sellingPriceMinor', quantity: 'quantity', orderCount: 'orderCount', viewCount: 'viewCount' };
+    const SORTABLE: Record<string, string> = { createdAt: 'createdAt', updatedAt: 'updatedAt', title: 'title', sellingPrice: 'sellingPriceMinor', orderCount: 'orderCount', viewCount: 'viewCount' };
     const sortField = SORTABLE[String(req.query.sort || 'createdAt')] || 'createdAt';
     const sortDir = req.query.dir === 'asc' ? 1 : -1;
-    const listFields = (summary ? '' : 'description ') + 'publicId hookId title slug costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency quantity reservedQuantity colors sizes images status categoryId marketId sourceStateId availabilityStatus vendorId source viewCount orderCount averageRating createdAt updatedAt';
+    const listFields = (summary ? '' : 'description ') + 'publicId hookId title slug costPrice sellingPrice discountedPrice minAcceptablePrice sellingPriceMinor discountMinor currency colors sizes images status categoryId marketId sourceStateId availabilityStatus availabilityValidUntil lastAvailabilityConfirmedAt internalSellerReference vendorId source viewCount orderCount averageRating createdAt updatedAt';
     const productsQuery = Product.find(where)
       .select(listFields)
       .sort({ [sortField]: sortDir, _id: -1 })
@@ -436,13 +443,17 @@ export class AdminProductsController {
     const cached = adminProductStatsCache.get('summary');
     if (cached) return cached;
     const products = adminRepos.products();
-    const [total, approved, pendingApproval, lowStock, soldOut] = await Promise.all([
+    const now = new Date();
+    const [total, approved, pendingApproval, needsRecheck, unavailable] = await Promise.all([
       products.count(),
       products.count({ where: { status: ProductStatus.APPROVED } }),
       products.count({ where: { status: ProductStatus.PENDING_APPROVAL } }),
-      products.model.countDocuments({ quantity: { $gt: 0, $lt: 10 } }),
-      products.count({ where: { status: ProductStatus.SOLD_OUT } }),
+      products.model.countDocuments({ deletedAt: { $exists: false }, $or: [
+        { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
+      ] }),
+      products.model.countDocuments({ deletedAt: { $exists: false }, availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE }),
     ]);
-    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, lowStock, soldOut });
+    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, needsRecheck, unavailable });
   }
 }

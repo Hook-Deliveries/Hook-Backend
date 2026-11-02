@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc && tsc-alias",
+    "report:variants": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/report-variant-mismatches.ts",
     "seed:categories": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-category-tree.ts",
     "migrate:categories": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-legacy-categories.ts",
     "seed:catalog": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-category-catalog.ts",
@@ -14,6 +15,7 @@
     "seed:launch-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-launch-products.ts",
     "seed:launch-accounts": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-launch-accounts.ts",
     "db:remove-pod": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/remove-pod-data.ts",
+    "seed:demo-customer": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-demo-customer.ts",
     "seed:delivery-fees": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-delivery-state-fees.ts",
     "test:reliability": "tsx --test tests/reliability-*.test.ts",
     "test:deletion": "tsx --test tests/deletion-*.test.ts",

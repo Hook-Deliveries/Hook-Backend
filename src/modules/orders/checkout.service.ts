@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "crypto";
+import { onSaleFilter } from "@lib/product-availability";
 import mongoose, { isValidObjectId } from "mongoose";
 import { ProductVariant } from "@models/catalog/catalog.model";
 import {
@@ -898,8 +899,7 @@ export class CheckoutService {
   private async revalidateLines(customerId: string, items: any[]) {
     const products = await Product.find({
       _id: { $in: items.map((item) => item.productId) },
-      status: ProductStatus.PUBLISHED,
-      availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
+      ...onSaleFilter(),
     }).lean({ virtuals: true });
     const map = new Map(
       products.map((product) => [recordId(product), product]),

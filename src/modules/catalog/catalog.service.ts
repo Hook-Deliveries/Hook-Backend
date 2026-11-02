@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
+import { normalizeProductColors } from '@lib/product-color';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import {
   ProductAvailabilityStatus,
@@ -53,7 +55,6 @@ type ApproveAsProductInput = {
   sellingPrice: number;
   discountedPrice?: number;
   minAcceptablePrice: number;
-  quantity: number;
   categoryId: string;
   marketId: string;
   images: string[];
@@ -140,6 +141,11 @@ async function ensureMarketVendor(identifier: string, marketId: string) {
   return vendor;
 }
 
+/** The reference admins see for a capture: the supplier's own id and name, so it can never drift from who it came from. */
+function sellerReferenceFor(vendor: { publicId?: string; businessName?: string }) {
+  return [vendor.publicId, vendor.businessName].filter(Boolean).join(' · ') || undefined;
+}
+
 async function category(identifier: string) {
   // Only an active leaf may hold products: a parent with sub-categories is refused.
   return categoryService.assertAssignable(identifier) as Promise<any>;
@@ -155,7 +161,6 @@ function assertSubmissionPublishReady(product: Record<string, any>) {
   const missing: string[] = [];
   if (!String(product.description || '').trim() || String(product.description).trim().length < 20) missing.push('description');
   if (!Array.isArray(product.images) || !product.images.length) missing.push('images');
-  if (Number(product.quantity || 0) < 1) missing.push('quantity');
   if (Number(product.costPrice || 0) <= 0) missing.push('costPrice');
   if (Number(product.sellingPrice || 0) <= 0) missing.push('sellingPrice');
   if (missing.length) {
@@ -183,7 +188,7 @@ async function claimMedia(accountId: string, submissionId: string, mediaIds: str
   return assets;
 }
 
-function validateSubmissionReady(submission: any, mediaCount: number) {
+function validateSubmissionReady(submission: any, mediaCount: number, options: { requireConfirmed?: boolean } = {}) {
   const fields: string[] = [];
   if (!submission.basicTitle?.trim()) fields.push('basicTitle');
   if (!submission.categorySuggestionId) fields.push('categorySuggestionId');
@@ -193,6 +198,8 @@ function validateSubmissionReady(submission: any, mediaCount: number) {
   const viewIds = requiredViews.map((view) => submission.mediaViews?.[view]).filter(Boolean);
   if (mediaCount < 3 || viewIds.length !== 3 || new Set(viewIds).size !== 3) fields.push('frontSideBackPhotos');
   if (!submission.captureChecklistConfirmed) fields.push('captureChecklistConfirmed');
+  // A capture is a confirmation made on the market, so an item the associate could not confirm cannot be submitted.
+  if (options.requireConfirmed && ![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(submission.availabilityStatus)) fields.push('availabilityStatus');
   if (fields.length) {
     throw new HttpError(400, 'Complete the required submission fields before submitting', { fields }, 'SUBMISSION_VALIDATION_FAILED');
   }
@@ -331,7 +338,7 @@ export class MarketAssociateCatalogService {
       variants: input.variants,
       availabilityStatus: input.availabilityStatus,
       availabilityNote: input.availabilityNote,
-      internalSellerReference: input.internalSellerReference,
+      internalSellerReference: sellerReferenceFor(vendor),
       status: ProductSubmissionStatus.DRAFT,
       version: 1,
     });
@@ -368,7 +375,7 @@ export class MarketAssociateCatalogService {
           variants: input.variants,
           availabilityStatus: input.availabilityStatus,
           availabilityNote: input.availabilityNote,
-          internalSellerReference: input.internalSellerReference,
+          internalSellerReference: sellerReferenceFor(vendor),
         },
         $inc: { version: 1 },
       },
@@ -397,11 +404,14 @@ export class MarketAssociateCatalogService {
       ownerId: current._id.toString(),
       status: 'ready',
     });
-    validateSubmissionReady(current, mediaCount);
+    validateSubmissionReady(current, mediaCount, { requireConfirmed: true });
+    // Submitting is the Market Associate's confirmation that this item is on the market today, so the day it is
+    // submitted is the day its availability was verified.
+    const verifiedAt = new Date();
     const updated = await ProductSubmission.findOneAndUpdate(
       { _id: current._id, version, status: current.status },
       {
-        $set: { status: ProductSubmissionStatus.SUBMITTED, submittedAt: new Date() },
+        $set: { status: ProductSubmissionStatus.SUBMITTED, submittedAt: verifiedAt, availabilityVerifiedAt: verifiedAt },
         $push: {
           reviewNotes: {
             action: 'submitted',
@@ -689,16 +699,26 @@ export class CatalogReviewService {
     if (isPublished && ![ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED].includes(current.availabilityStatus)) {
       throw new HttpError(409, 'The Market Associate has not confirmed this item is available. Approve it as a draft, or ask for a fresh availability check first.', undefined, 'CONFLICT');
     }
-    const checkDays = Math.min(Math.max(Number((await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean())?.catalogAvailabilityCheckDays || 4), 1), 30);
+    // Availability counts from the day the Market Associate confirmed it on the market, not from when an admin got
+    // round to approving it, so a capture that sat in review does not get extra days of sale.
+    const verifiedAt: Date = current.availabilityVerifiedAt || current.submittedAt || new Date();
+    const validUntil = await availabilityValidUntil(new Date(verifiedAt));
+    if (isPublished && validUntil.getTime() <= Date.now()) {
+      throw new HttpError(409, "This capture's market confirmation has expired. Approve it as a draft and ask the Market Associate to reconfirm, or publish once it is rechecked.", undefined, 'CONFLICT');
+    }
     if (isPublished) {
       assertSubmissionPublishReady({
         description: approveInput.description,
         images,
-        quantity: approveInput.quantity,
         costPrice,
         sellingPrice,
       });
     }
+    // Sizes and colours come from the variants the Market Associate ticked, so the product can never list an option
+    // that has no variant behind it (or miss one that does).
+    const activeVariants: SubmissionVariant[] = (current.variants || []).filter((item: SubmissionVariant) => item.active !== false);
+    const variantSizes = [...new Set(activeVariants.map((item) => item.size?.trim()).filter((value): value is string => Boolean(value)))];
+    const variantColours = normalizeProductColors(activeVariants.map((item) => item.colour || '').filter(Boolean));
     // The product keeps only the uploads that made it into its final gallery; the rest are released.
     const submissionAssets = current.mediaIds?.length
       ? await CatalogMediaAsset.find({ $or: [{ publicId: { $in: current.mediaIds } }, { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }] }).lean({ virtuals: true })
@@ -743,16 +763,19 @@ export class CatalogReviewService {
           currency: current.currency,
           mediaAssetIds: keptIds,
           images,
-          colors: approveInput.colors || [],
-          sizes: approveInput.sizes || [],
-          quantity: Number(approveInput.quantity || 0),
+          colors: variantColours,
+          sizes: variantSizes,
+          // Hook sells what is confirmed on the market, not counted stock, so no quantity is tracked.
+          quantity: 0,
           reservedQuantity: 0,
+          internalSellerReference: current.internalSellerReference,
           costPrice,
           sellingPrice,
           minAcceptablePrice,
           status: approveInput.status,
           availabilityStatus: current.availabilityStatus,
           customerAvailabilityNote: current.availabilityNote,
+          lastMarketVerifiedAt: verifiedAt,
           negotiationRules,
           commercialApproval: { approved: isPublished, approvedBy: isPublished ? actorId : undefined, approvedAt: isPublished ? now : undefined, sourceMarketAssociateId: current.marketAssociateId },
           source: 'admin',
@@ -763,9 +786,9 @@ export class CatalogReviewService {
           ...(isPublished ? {
             publishedAt: now,
             publishedBy: actorId,
-            lastAvailabilityConfirmedAt: now,
-            // Same rolling expiry every other publish path sets, so the availability job can escalate it.
-            availabilityValidUntil: new Date(now.getTime() + checkDays * 86_400_000),
+            lastAvailabilityConfirmedAt: new Date(verifiedAt),
+            // The same window every other publish path uses, so the availability job can escalate it when it runs out.
+            availabilityValidUntil: validUntil,
           } : {}),
         }], { session: transaction });
         for (let index = 0; index < current.variants.length; index += 1) {

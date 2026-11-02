@@ -24,6 +24,8 @@ export type VariantInput = { size?: string; colour?: string; attributes?: Record
 
 const idOf = (category: CategoryDoc) => category._id.toString();
 const norm = (value: unknown) => String(value ?? '').trim().toLowerCase();
+/** Other common spellings of a standard size, accepted as the size the app shows. */
+const SIZE_ALIASES: Record<string, string> = { xxl: '2xl', xxxl: '3xl' };
 
 /**
  * Every rule about the category tree lives here: who a product may be filed
@@ -160,6 +162,23 @@ export class CategoryService {
    * until an admin defines one.
    */
   async validateVariants(category: CategoryDoc, variants: VariantInput[]) {
+    // Two rows describing the same combination would collide on the product's unique variant index when it is created.
+    const seen = new Map<string, number>();
+    variants.forEach((variant, index) => {
+      const key = [
+        norm(variant.size),
+        norm(variant.colour),
+        ...Object.entries(variant.attributes || {})
+          .filter(([, value]) => String(value ?? '').trim())
+          .map(([name, value]) => `${name}=${norm(value)}`)
+          .sort(),
+      ].join('|');
+      const first = seen.get(key);
+      if (first !== undefined) {
+        throw new HttpError(400, `Variant ${index + 1} repeats Variant ${first + 1}. List each combination once.`, undefined, 'VALIDATION_ERROR');
+      }
+      seen.set(key, index);
+    });
     const attributes = await this.attributesFor(category);
     if (!attributes.length) return;
     const errors: string[] = [];
@@ -183,6 +202,15 @@ export class CategoryService {
         const options = this.optionsOf(attribute);
         if (attribute.type === 'select' && options && !options.some((option) => norm(option) === norm(value))) {
           errors.push(`${row}${attribute.label} must be one of: ${options.join(', ')}`);
+        }
+        // Sizes with a fixed scale (shoes, clothing, UK dress, bras, kids shoes) must come from that scale, so a letter
+        // size can never end up on a shoe or a foot length on a dress.
+        if (attribute.type === 'size' && attribute.preset && attribute.preset !== 'general') {
+          const scale = SIZE_PRESETS[attribute.preset];
+          const wanted = SIZE_ALIASES[norm(value)] ?? norm(value);
+          if (scale && !scale.some((option) => norm(option) === wanted)) {
+            errors.push(`${row}${attribute.label} must be one of: ${scale.join(', ')}`);
+          }
         }
       }
       if (!usesSize && String(variant.size ?? '').trim()) errors.push(`${row}${category.name} does not use sizes`);

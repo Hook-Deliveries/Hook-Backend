@@ -8,11 +8,19 @@ let cachedKeys: { expiresAt: number; keys: AppleKey[] } | undefined;
 
 async function appleKeys() {
   if (cachedKeys && cachedKeys.expiresAt > Date.now()) return cachedKeys.keys;
-  const response = await fetch('https://appleid.apple.com/auth/keys');
-  if (!response.ok) throw new HttpError(503, 'Apple sign-in is temporarily unavailable');
-  const payload = await response.json() as { keys: AppleKey[] };
-  cachedKeys = { keys: payload.keys, expiresAt: Date.now() + 60 * 60 * 1000 };
-  return payload.keys;
+  try {
+    const response = await fetch('https://appleid.apple.com/auth/keys', { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`Apple responded ${response.status}`);
+    const payload = await response.json() as { keys: AppleKey[] };
+    if (!Array.isArray(payload.keys) || !payload.keys.length) throw new Error('Apple returned no signing keys');
+    cachedKeys = { keys: payload.keys, expiresAt: Date.now() + 60 * 60 * 1000 };
+    return payload.keys;
+  } catch (error) {
+    console.error('[apple-auth] could not load Apple signing keys:', error instanceof Error ? error.message : error);
+  
+    if (cachedKeys) return cachedKeys.keys;
+    throw new HttpError(503, 'Apple sign-in is temporarily unavailable');
+  }
 }
 
 /**

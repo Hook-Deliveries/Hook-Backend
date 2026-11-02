@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { CommerceOrderStatus } from '@lib/constants';
+import { AccountType, CommerceOrderStatus } from '@lib/constants';
 import { sendSuccess } from '@utils/http';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
@@ -68,8 +68,8 @@ export class AdminOverviewController {
         .sort({ createdAt: -1 }).limit(8)
         .select('publicId commerceStatus commercePaymentMethod totalMinor createdAt customerSnapshot addressSnapshot')
         .lean(),
-      User.countDocuments({ createdAt: { $gte: start } }),
-      User.countDocuments({ createdAt: { $gte: prevStart, $lt: start } }),
+      User.countDocuments({ accountType: AccountType.CUSTOMER, createdAt: { $gte: start } }),
+      User.countDocuments({ accountType: AccountType.CUSTOMER, createdAt: { $gte: prevStart, $lt: start } }),
       Order.countDocuments({ ...scope, commerceStatus: { $in: DELIVERED }, updatedAt: { $gte: start } }),
       Order.countDocuments({ ...scope, commerceStatus: { $in: DELIVERED }, updatedAt: { $gte: prevStart, $lt: start } }),
       Order.countDocuments({ ...scope, commerceStatus: { $in: IN_FULFILMENT } }),

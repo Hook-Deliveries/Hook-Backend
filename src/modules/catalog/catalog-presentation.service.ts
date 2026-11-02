@@ -114,6 +114,7 @@ function format(record: any, resolved: Resolved, mediaService: CatalogMediaServi
     variants: record.variants || [],
     availabilityStatus: record.availabilityStatus,
     availabilityNote: record.availabilityNote,
+    availabilityVerifiedAt: record.availabilityVerifiedAt,
     status: record.status,
     reviewNotes: record.reviewNotes || [],
     submittedAt: record.submittedAt,

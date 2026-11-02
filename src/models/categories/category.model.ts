@@ -2,7 +2,7 @@ import { BaseEntity, createModel, createSchema } from '@models/base.model';
 
 /** One thing a product in this category asks for: a size, a colour, or any other detail. */
 export type CategoryAttributeType = 'size' | 'colour' | 'select' | 'text';
-export type SizePreset = 'clothing' | 'shoes' | 'kids-shoes' | 'bra' | 'general';
+export type SizePreset = 'clothing' | 'uk-dress' | 'shoes' | 'kids-shoes' | 'bra' | 'general';
 export interface CategoryAttribute {
   key: string;
   label: string;

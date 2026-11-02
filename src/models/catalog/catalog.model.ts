@@ -38,6 +38,9 @@ export interface ProductSubmission extends BaseEntity {
   variants: SubmissionVariant[];
   availabilityStatus: ProductAvailabilityStatus;
   availabilityNote?: string;
+  /** When the Market Associate confirmed on the market that this item is available (set on submit). */
+  availabilityVerifiedAt?: Date;
+  /** Derived from the source supplier when the capture is saved; never typed in by hand. */
   internalSellerReference?: string;
   status: ProductSubmissionStatus;
   reviewNotes: ReviewNote[];
@@ -122,6 +125,7 @@ const submissionSchema = createSchema<ProductSubmission>({
     index: true,
   },
   availabilityNote: { type: String, maxlength: 500 },
+  availabilityVerifiedAt: { type: Date },
   internalSellerReference: { type: String, maxlength: 300 },
   status: {
     type: String,

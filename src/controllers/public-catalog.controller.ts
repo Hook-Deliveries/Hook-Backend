@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { stillValidFilter } from "@lib/product-availability";
 import { categoryService } from '@modules/catalog/category.service';
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { Category } from "@models/categories/category.model";
@@ -63,6 +64,8 @@ function baseFilter() {
     status: ProductStatus.PUBLISHED,
     publishedAt: { $lte: new Date() },
     deletedAt: { $exists: false },
+    // A product whose market confirmation has run out leaves the listings; its page still explains why.
+    ...stillValidFilter(),
   };
 }
 

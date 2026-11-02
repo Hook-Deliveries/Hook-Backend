@@ -14,18 +14,12 @@ import { byIdentifier, byProductIdentifier } from "@modules/catalog/catalog.serv
 import { HttpError } from "@utils/http";
 import { publishRealtime } from "@modules/platform";
 import { CommerceSettings } from "@models/commerce/commerce.model";
-import { getLowStockThreshold } from "@modules/catalog/inventory-settings.service";
 import { legacyProductOptions } from '@lib/legacy-product-options';
+import { availabilityValidUntil as validUntilFor } from "@modules/catalog/availability-window.service";
+import { isOnSale } from "@lib/product-availability";
 
 async function nextAvailabilityDeadline(from = new Date()) {
-  const settings = await CommerceSettings.findOne({ key: "commerce" })
-    .select("catalogAvailabilityCheckDays")
-    .lean();
-  const days = Math.min(
-    Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1),
-    30,
-  );
-  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
+  return validUntilFor(from);
 }
 
 function versionFilter(record: any, version: number) {
@@ -773,8 +767,6 @@ export async function publicProductRepresentations(
       : Promise.resolve([]),
   ]);
 
-  const lowStockThreshold = await getLowStockThreshold();
-
   const mapByIdentifier = (records: any[]) => {
     const map = new Map<string, any>();
     records.forEach((item) => {
@@ -833,12 +825,8 @@ export async function publicProductRepresentations(
     const effectivePriceMinor =
       Number(product.sellingPriceMinor || 0) -
       Number(product.discountMinor || 0);
-    const isPurchasable =
-      product.status === ProductStatus.PUBLISHED &&
-      [
-        ProductAvailabilityStatus.AVAILABLE,
-        ProductAvailabilityStatus.LIMITED,
-      ].includes(product.availabilityStatus);
+    // One rule decides this everywhere: live, confirmed available, and the confirmation has not run out.
+    const isPurchasable = isOnSale(product);
     const storedVariants = variantsMap.get(productId) || [];
     const fallbackVariants = storedVariants.length
       ? []
@@ -884,11 +872,12 @@ export async function publicProductRepresentations(
         isPurchasable && Boolean(product.negotiationRules?.enabled),
       availabilityStatus: product.availabilityStatus,
       isPurchasable,
-      availableQuantity: Math.max(
-        0,
-        Number(product.quantity || 0) - Number(product.reservedQuantity || 0),
-      ),
-      lowStockThreshold,
+      // Hook sells what was confirmed on the market, so customers see a verified status, never a stock count.
+      availability: {
+        status: isPurchasable ? "available" : "unavailable",
+        verifiedAt: product.lastAvailabilityConfirmedAt || null,
+        validUntil: product.availabilityValidUntil || null,
+      },
     };
     return options.compact
       ? compact

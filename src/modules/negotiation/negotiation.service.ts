@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
+import { onSaleFilter } from "@lib/product-availability";
 import mongoose from 'mongoose';
 import { AccountType, NegotiatedQuoteStatus, NegotiationStatus, ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { NegotiatedQuote, ProductVariant } from '@models/catalog/catalog.model';
@@ -125,8 +126,7 @@ export class NegotiationService {
     assertAzureConfigured(settings?.negotiationEnabled !== false && settings?.negotiationAzureWordingEnabled !== false);
     const product = await Product.findOne({
       ...identifier(input.productId),
-      status: ProductStatus.PUBLISHED,
-      availabilityStatus: { $in: [ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.LIMITED] },
+      ...onSaleFilter(),
       'negotiationRules.enabled': true,
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });

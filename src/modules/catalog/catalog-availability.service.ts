@@ -1,5 +1,6 @@
 import { ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { CommerceSettings } from '@models/commerce/commerce.model';
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
 import { Product } from '@models/products/product.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { byProductIdentifier } from '@modules/catalog/catalog.service';
@@ -71,9 +72,8 @@ export class CatalogAvailabilityService {
 
   async confirm(accountId: string, identifier: string, input: { status: 'available' | 'limited'; note?: string; version: number }) {
     const { product } = await marketAssociateForProduct(accountId, identifier);
-    const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('catalogAvailabilityCheckDays').lean();
-    const days = Math.min(Math.max(Number(settings?.catalogAvailabilityCheckDays || 4), 1), 30);
     const confirmedAt = new Date();
+    const validUntil = await availabilityValidUntil(confirmedAt);
     const nextStatus = product.availabilityPreviousStatus === ProductStatus.PUBLISHED && product.commercialApproval?.approved === true ? ProductStatus.PUBLISHED : product.status === ProductStatus.AVAILABILITY_UNCONFIRMED ? ProductStatus.DRAFT : product.status;
     const updated = await Product.findOneAndUpdate(
       versionFilter(product, input.version),
@@ -86,7 +86,8 @@ export class CatalogAvailabilityService {
             ? 'Limited availability. Order while it is still available.'
             : 'Available from a verified Hook Market.',
           lastAvailabilityConfirmedAt: confirmedAt,
-          availabilityValidUntil: new Date(confirmedAt.getTime() + days * 24 * 60 * 60 * 1000),
+          availabilityValidUntil: validUntil,
+          lastMarketVerifiedAt: confirmedAt,
         },
         $unset: { availabilityPreviousStatus: 1, availabilityCheckDueAt: 1, availabilityEscalatedAt: 1 },
         $inc: { catalogVersion: 1 },
