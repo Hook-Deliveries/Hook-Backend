@@ -3,12 +3,12 @@ name: Deploy
 on:
   workflow_run:
     workflows: [CI]
-    branches: [main]
+    branches: [main, development]
     types: [completed]
   workflow_dispatch:
 
 concurrency:
-  group: deploy-production
+  group: deploy-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -22,8 +22,9 @@ jobs:
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           HOST: ${{ secrets.DEPLOY_HOST }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          TARGET: ${{ (github.event.workflow_run.head_branch || github.ref_name) == 'development' && 'dev ' || '' }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy -o BatchMode=yes "deploy@$HOST" "$SHA"
+          ssh -i ~/.ssh/deploy -o BatchMode=yes "deploy@$HOST" "$TARGET$SHA"
