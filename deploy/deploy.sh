@@ -2,6 +2,7 @@
 set -euo pipefail
 
 main() {
+[ "${1%% *}" = dev ] && exec "$HOME/hook-dev/deploy/deploy.sh" "${1#dev }"
 cd "$(dirname "$0")"
 
 REF="${1:?usage: deploy.sh <commit-sha|origin/main|origin/development>}"
