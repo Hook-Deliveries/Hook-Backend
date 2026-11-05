@@ -213,6 +213,7 @@ export class CustomerController {
     const settings = await CommerceSettings.findOne({ key: "commerce" }).lean();
     sendSuccess(res, {
       currency: settings?.currency || "NGN",
+      vatEnabled: settings?.vatEnabled ?? true,
       vatRatePercent: settings?.vatRatePercent ?? 7.5,
       policyVersions: settings?.activePolicyVersions || {},
       orderEarnEnabled: settings?.orderEarnEnabled ?? true,

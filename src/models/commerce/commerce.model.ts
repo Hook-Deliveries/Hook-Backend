@@ -98,6 +98,8 @@ export interface CommerceSettings extends BaseEntity {
   /** Smallest cart subtotal (kobo) that may be checked out. Smaller carts can be saved but not bought. */
   minimumCheckoutMinor: number;
   /** Kobo when flat, percent of the subtotal when percent. */
+  /** Master switch: when off, no VAT is charged or shown, whatever the rate below says. */
+  vatEnabled: boolean;
   /** VAT charged on products, as a percent. */
   vatRatePercent: number;
   activePolicyVersions: Record<string, string>;
@@ -259,6 +261,7 @@ const settingsSchema = createSchema<CommerceSettings>({
   },
   lowStockThreshold: { type: Number, default: 5, min: 0, max: 100 },
   minimumCheckoutMinor: { type: Number, default: 1800000, min: 0 },
+  vatEnabled: { type: Boolean, default: true },
   vatRatePercent: { type: Number, default: 7.5, min: 0, max: 30 },
   activePolicyVersions: { type: Object, default: {} },
   updatedBy: { type: String },

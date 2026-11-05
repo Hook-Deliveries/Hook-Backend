@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "tsc && tsc-alias",
+    "db:transfer-waitlist": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/transfer-waitlist.ts",
     "report:variants": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/report-variant-mismatches.ts",
     "seed:categories": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-category-tree.ts",
     "migrate:categories": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-legacy-categories.ts",

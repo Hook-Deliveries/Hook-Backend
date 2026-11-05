@@ -4,6 +4,7 @@ import { AppDataSource } from '@config/data-source';
 import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { NotificationService } from '@modules/notifications/notification.service';
+import { diagnosePushForUser } from '@modules/notifications/push.service';
 import { AccountSession } from '@models/platform/session.model';
 import { User } from '@models/users/user.model';
 import { realtime } from '@modules/platform/realtime.service';
@@ -52,6 +53,16 @@ export class DeviceController {
       }
     }
     sendSuccess(res, device);
+  };
+
+  /** Sends a real test push to this account's devices and reports exactly what Expo said, so a broken setup can be diagnosed. */
+  private static lastTest = new Map<string, number>();
+  testPush = async (req: Request, res: Response) => {
+    const userId = req.user!.sub;
+    const last = DeviceController.lastTest.get(userId) || 0;
+    if (Date.now() - last < 20_000) throw new HttpError(429, 'Wait a few seconds before testing again', undefined, 'RATE_LIMITED');
+    DeviceController.lastTest.set(userId, Date.now());
+    sendSuccess(res, await diagnosePushForUser(userId));
   };
 
   unregister = async (req: Request, res: Response) => {
