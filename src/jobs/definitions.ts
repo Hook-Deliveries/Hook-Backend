@@ -43,6 +43,7 @@ export const JOBS: JobDefinition[] = [
   // Drains every outbox event type: fulfilment, payment/order/refund effects.
   { name: 'outbox-drain', everyMs: 3_000, run: drainOutbox },
   { name: 'partner-custody-sync', everyMs: 2 * 60_000, run: () => fulfilmentService.syncPartnerCustody() },
+  { name: 'fez-tracking-sync', everyMs: 10 * 60_000, run: () => fulfilmentService.syncFezShipments() },
   { name: 'fulfilment-deadlines', everyMs: 5_000, run: () => fulfilmentService.processOperationalDeadlines() },
   { name: 'negotiation-start-notifications', everyMs: 5_000, run: () => deliverNegotiationStartNotifications() },
   {
