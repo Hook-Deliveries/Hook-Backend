@@ -53,6 +53,24 @@ test('fez webhook: a bad signature changes nothing', async () => {
   assert.equal(await shipmentStatus(), 'BOOKED_WITH_PROVIDER');
 });
 
+test('fez webhook: one delivered shipment of two leaves the order partially delivered', async () => {
+  await seed('IN_TRANSIT');
+  const { orderId } = (await Shipment.findOne({ publicId: 'SHP-F-1' }).lean()) as any;
+  await Shipment.collection.insertOne({ publicId: 'SHP-F-2', orderId, sourceStateId: 'st2', hubId: 'hub2', status: 'IN_TRANSIT', version: 1, trackingEvents: [], provider: 'fez', externalReference: 'FEZ456', createdAt: new Date(), updatedAt: new Date() } as any);
+  const deliver = (orderNumber: string) => {
+    const signature = createHmac('sha256', 'fez-secret').update(`${orderNumber}Delivered1`).digest('hex');
+    return fulfilmentService.logisticsWebhook('fez', `${orderNumber}:Delivered`, { orderNumber, status: 'Delivered' }, signature, '1');
+  };
+  await deliver('FEZ123');
+  let order = await Order.findById(orderId).lean() as any;
+  assert.equal(order.commerceStatus, 'PARTIALLY_DELIVERED');
+  assert.equal(order.deliveredAt, undefined);
+  await deliver('FEZ456');
+  order = await Order.findById(orderId).lean() as any;
+  assert.equal(order.commerceStatus, 'DELIVERED');
+  assert.ok(order.deliveredAt);
+});
+
 test('fez sync: polling applies the tracked status when no webhook arrived', async () => {
   await seed('BOOKED_WITH_PROVIDER');
   stubFez({ '/order/track/FEZ123': () => json(200, { status: 'Success', order: { orderStatus: 'Dispatched' }, history: [] }) });

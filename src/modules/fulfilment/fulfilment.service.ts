@@ -1822,6 +1822,26 @@ export class FulfilmentService {
     return shipment.toJSON();
   }
 
+  /** The order's status given every shipment on it, so one of several can't mark the whole order delivered. */
+  private async settleOrderForShipment(shipment: any, next: ShipmentStatus, session: mongoose.ClientSession) {
+    if (shipment.fulfilmentGroupId) {
+      const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
+        : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
+          : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
+      if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } }, { session });
+    }
+    // Read inside the transaction so concurrent deliveries of two shipments
+    // of one order each see the other's committed state, not a stale count.
+    const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').session(session).lean();
+    const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
+    const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
+    return next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
+      : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
+        : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
+          : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
+            : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+  }
+
   async updateShipment(actor: Actor, identifierValue: string, body: Record<string, any>) {
     const shipment = await Shipment.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
     if (!shipment) throw new HttpError(404, 'Shipment not found', undefined, 'NOT_FOUND'); await assertStaffScope(actor, shipment.sourceStateId, shipment.hubId);
@@ -1835,22 +1855,7 @@ export class FulfilmentService {
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (shipment.fulfilmentGroupId) {
-        const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
-          : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
-            : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
-        if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } }, { session });
-      }
-      // Read inside the transaction so concurrent deliveries of two shipments
-      // of one order each see the other's committed state, not a stale count.
-      const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').session(session).lean();
-      const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
-      const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
-      orderStatus = next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
-        : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
-          : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
-            : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
-              : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+      orderStatus = await this.settleOrderForShipment(shipment, next, session);
       if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(orderStatus === CommerceOrderStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, actor.accountId) } }, { session });
       return moved;
     });
@@ -2510,13 +2515,14 @@ export class FulfilmentService {
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'IGNORED', processedAt: new Date() } });
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
-    const orderStatus = next === ShipmentStatus.DELIVERED ? CommerceOrderStatus.DELIVERED : next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? CommerceOrderStatus.IN_TRANSIT : undefined;
+    let orderStatus: CommerceOrderStatus | undefined;
     // Shipment, order and the event marker commit together, so a crash cannot
     // leave a moved shipment whose event is still "received".
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(next === ShipmentStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
+      orderStatus = await this.settleOrderForShipment(shipment, next, session);
+      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(orderStatus === CommerceOrderStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } }, { session });
       return moved;
     });
