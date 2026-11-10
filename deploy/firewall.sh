@@ -6,10 +6,16 @@ apply() {
   "$cmd" -N HOOK-CF 2>/dev/null || "$cmd" -F HOOK-CF
   for range in $(curl -fsS "$url"); do "$cmd" -A HOOK-CF -s "$range" -j RETURN; done
   "$cmd" -A HOOK-CF -j DROP
+  # Keep Cloudflare-only access for new inbound flows, but allow replies to
+  # HTTPS requests initiated by containers (for example, Cloudinary uploads).
+  for port in 80 443; do
+    "$cmd" -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctstate ESTABLISHED,RELATED --ctorigdstport "$port" -j RETURN 2>/dev/null \
+      || "$cmd" -I DOCKER-USER 1 -i eth0 -p tcp -m conntrack --ctstate ESTABLISHED,RELATED --ctorigdstport "$port" -j RETURN
+  done
   "$cmd" -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 80 -j HOOK-CF 2>/dev/null \
-    || "$cmd" -I DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 80 -j HOOK-CF
+    || "$cmd" -A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 80 -j HOOK-CF
   "$cmd" -C DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 443 -j HOOK-CF 2>/dev/null \
-    || "$cmd" -I DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 443 -j HOOK-CF
+    || "$cmd" -A DOCKER-USER -i eth0 -p tcp -m conntrack --ctorigdstport 443 -j HOOK-CF
 }
 
 apply iptables https://www.cloudflare.com/ips-v4
