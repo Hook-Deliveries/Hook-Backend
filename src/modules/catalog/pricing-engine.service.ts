@@ -48,6 +48,15 @@ export class PricingEngine {
     const allowedRange = input.sellingPriceMinor - floor;
     const threshold = input.sellingPriceMinor - Math.floor((allowedRange * input.offerNumber) / input.maximumOffers);
     const remainingOffers = input.maximumOffers - input.offerNumber;
+    // An offer that already meets this round's price is accepted, even when it repeats the last one.
+    if (input.customerOfferMinor >= threshold) {
+      return {
+        decision: 'ACCEPT',
+        acceptedPriceMinor: Math.min(input.customerOfferMinor, input.sellingPriceMinor),
+        reasonCode: 'OFFER_WITHIN_ROUND_BOUNDARY',
+        remainingOffers,
+      };
+    }
     const customerDidNotImprove = Boolean(
       input.previousCustomerOfferMinor
       && input.customerOfferMinor <= input.previousCustomerOfferMinor,

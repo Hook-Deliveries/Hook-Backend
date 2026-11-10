@@ -101,6 +101,11 @@ export interface NegotiatedQuote extends BaseEntity {
   reservedUntil?: Date;
   usedByOrderId?: string;
   usedAt?: Date;
+  /** catalogVersion of the product when the price was locked; informational, the live rules decide validity. */
+  productVersion?: number;
+  /** Set when the quote was cancelled because the product changed (never because of customer action). */
+  voidedAt?: Date;
+  voidReason?: string;
 }
 
 const submissionSchema = createSchema<ProductSubmission>({
@@ -202,9 +207,13 @@ const quoteSchema = createSchema<NegotiatedQuote>({
   reservedUntil: { type: Date, index: true },
   usedByOrderId: { type: String, index: true, sparse: true },
   usedAt: { type: Date },
+  productVersion: { type: Number },
+  voidedAt: { type: Date },
+  voidReason: { type: String },
   deletedAt: { type: Date },
 });
 quoteSchema.index({ customerId: 1, status: 1, expiresAt: 1 });
+quoteSchema.index({ productId: 1, status: 1 });
 
 export const ProductSubmission = createModel<ProductSubmission>('ProductSubmission', submissionSchema);
 export const CatalogMediaAsset = createModel<CatalogMediaAsset>('CatalogMediaAsset', mediaSchema);

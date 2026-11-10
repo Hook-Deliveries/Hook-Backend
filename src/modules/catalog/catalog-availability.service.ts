@@ -7,6 +7,7 @@ import { byProductIdentifier } from '@modules/catalog/catalog.service';
 import { MarketVendorService } from '@modules/catalog/market-vendor.service';
 import { publishRealtime } from '@modules/platform';
 import { HttpError } from '@utils/http';
+import { reconcileProductInBackground } from '@modules/negotiation/negotiation-reconcile.service';
 
 function versionFilter(product: any, version: number) {
   const currentVersion = Number(product.catalogVersion || 1);
@@ -21,6 +22,8 @@ function publishUpdate(product: any) {
   publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+  // A product that left the sale window takes its negotiations and locked prices with it.
+  reconcileProductInBackground(product._id?.toString());
 }
 
 async function marketAssociateForProduct(accountId: string, identifier: string) {
@@ -97,6 +100,34 @@ export class CatalogAvailabilityService {
     if (!updated) throw new HttpError(409, 'This Product was updated elsewhere', undefined, 'STALE_VERSION');
     publishUpdate(updated);
     return updated;
+  }
+
+  /**
+   * Confirms many products in one request. Each item goes through confirm() so
+   * ownership, assignment and version checks still apply; failures are reported
+   * per item instead of aborting the whole batch.
+   */
+  async confirmMany(accountId: string, input: { items: { publicId: string; version: number }[]; status: 'available' | 'limited' }) {
+    const seen = new Set<string>();
+    const items = input.items.filter((item) => !seen.has(item.publicId) && seen.add(item.publicId));
+    const note = input.status === 'limited' ? 'Market Associate confirmed limited availability.' : 'Market Associate confirmed availability.';
+    const confirmed: string[] = [];
+    const failed: { publicId: string; code: string; message: string }[] = [];
+    // Small worker pool: much faster than one-by-one without flooding the database.
+    const queue = [...items];
+    const worker = async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        try {
+          await this.confirm(accountId, item.publicId, { status: input.status, version: item.version, note });
+          confirmed.push(item.publicId);
+        } catch (error) {
+          const err = error as { code?: string; message?: string };
+          failed.push({ publicId: item.publicId, code: err.code || 'UNKNOWN', message: err.message || 'Could not confirm' });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, items.length) }, worker));
+    return { confirmed, failed };
   }
 
   async report(accountId: string, identifier: string, input: { note: string; version: number }) {

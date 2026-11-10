@@ -3,7 +3,7 @@ import {
   ProductAvailabilityStatus,
   ProductStatus,
 } from "@lib/constants";
-import { isOnSale, onSaleFilter } from "@lib/product-availability";
+import { isOnSale, withOnSale } from "@lib/product-availability";
 import type { MongoRepository as Repository } from "@lib/mongo-repository";
 import { Cart } from "@models/cart/cart.model";
 import { CartItem } from "@models/cart/cart-item.model";
@@ -19,6 +19,8 @@ import { Types } from "mongoose";
 import { publishRealtime } from "@modules/platform";
 import { ensureLegacyProductOptions } from '@modules/catalog';
 import { Market } from '@models/platform/network.model';
+import { deriveLiveRules, resolveQuote } from '@modules/negotiation/negotiation-live-rules.service';
+import { voidQuote } from '@modules/negotiation/negotiation-reconcile.service';
 
 function identifierFilter(identifier: string) {
   return Types.ObjectId.isValid(identifier)
@@ -113,12 +115,11 @@ export class CartService {
     // Validate the product and find the cart in parallel.
     const [product, existingCart] = await Promise.all([
       Product.findOne({
-        ...identifierFilter(productIdentifier),
-        ...onSaleFilter(),
+        ...withOnSale(identifierFilter(productIdentifier)),
         deletedAt: null,
       })
         .select(
-          "_id publicId hookId marketId sourceStateId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus colors sizes",
+          "_id publicId hookId marketId sourceStateId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus availabilityValidUntil negotiationRules colors sizes",
         )
         .lean({ virtuals: true }),
       this.findActiveCart(owner),
@@ -169,18 +170,19 @@ export class CartService {
         "PRODUCT_VARIANT_UNAVAILABLE",
       );
 
-    let quote = null;
+    let quote: any = null;
+    let quotedUnitPriceMinor: number | undefined;
+    // A Partner shopping for a customer negotiates on that customer's behalf.
+    const quoteOwner = owner.userId ?? owner.assistedCustomerId;
+    const explicitQuote = Boolean(quoteId);
     if (quoteId) {
+      // A locked price belongs to the product for its whole lifetime: any quantity, any option.
       quote = await NegotiatedQuote.findOne({
         ...identifierFilter(quoteId),
         productId,
-        // A Partner shopping for a customer negotiates on that customer's behalf.
-        customerId: owner.userId ?? owner.assistedCustomerId,
+        customerId: quoteOwner,
         status: NegotiatedQuoteStatus.ACTIVE,
-        quantity,
         expiresAt: { $gt: new Date() },
-        // A quote belongs to one variant: never let it attach to a different (or no) option.
-        ...(variant ? { variantId: variant._id.toString() } : { variantId: { $in: [null, ''] } as any }),
       }).lean({ virtuals: true });
       if (!quote)
         throw new HttpError(
@@ -189,6 +191,27 @@ export class CartService {
           undefined,
           "NEGOTIATION_QUOTE_EXPIRED",
         );
+    } else if (quoteOwner) {
+      // Every way of adding this product (a card, the quick-add sheet, the product page) gets the locked price.
+      quote = await this.activeQuoteFor(quoteOwner, productId);
+    }
+    if (quote) {
+      // The product may have changed since the price was agreed: the customer pays the lower of the agreed
+      // and current price, and a quote that can no longer stand is cancelled rather than quietly honoured.
+      const resolution = resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product));
+      if (!resolution.valid) {
+        await voidQuote(quote as never, resolution.reason);
+        if (explicitQuote)
+          throw new HttpError(
+            409,
+            "Your negotiated price is no longer valid for this product",
+            { reason: resolution.reason },
+            "NEGOTIATED_PRICE_VOIDED",
+          );
+        quote = null;
+      } else {
+        quotedUnitPriceMinor = resolution.unitPriceMinor;
+      }
     }
 
     // Writes return a receipt; the client reconciles the cart in the background.
@@ -197,14 +220,14 @@ export class CartService {
     const variantKey =
       variant?._id.toString() || this.variantKey(selectedVariants);
     const unitPriceMinor = Number(
-      quote?.agreedPriceMinor ??
+      quotedUnitPriceMinor ??
         product.sellingPriceMinor - Number(product.discountMinor || 0),
     );
     let changedItemPublicId: string | undefined;
     let reservedPublicId: string | undefined;
     let fastPathCompleted = false;
 
-    if (!quoteId) {
+    if (!quote) {
       reservedPublicId = await nextCartItemPublicId();
       try {
         const updated = await CartItem.findOneAndUpdate(
@@ -263,7 +286,8 @@ export class CartService {
         "publicId quantity quoteId quoteVersion unitPriceMinor totalPriceMinor unitPrice totalPrice",
       );
       if (existing) {
-        const nextQuantity = quote ? quantity : existing.quantity + quantity;
+        // Choosing a quantity with an explicit quote sets it exactly (so a retry cannot double it); every other add increments.
+        const nextQuantity = explicitQuote && quote ? quantity : existing.quantity + quantity;
         if (nextQuantity > 99)
           throw new HttpError(
             400,
@@ -274,7 +298,9 @@ export class CartService {
         if (quote) {
           existing.quoteId = quote._id.toString();
           existing.quoteVersion = quote.version || 1;
-          existing.unitPriceMinor = quote.agreedPriceMinor;
+          existing.unitPriceMinor = unitPriceMinor;
+          // The quote was just validated against the live product, so the line is current again.
+          existing.productVersion = product.catalogVersion || 1;
         } else if (existing.quoteId) {
           existing.quoteId = undefined;
           existing.quoteVersion = undefined;
@@ -378,7 +404,7 @@ export class CartService {
       .lean();
     if (!item) throw new HttpError(404, "Cart item not found");
     const product = await Product.findById(item.productId)
-      .select("status availabilityStatus availabilityValidUntil sellingPriceMinor discountMinor")
+      .select("status availabilityStatus availabilityValidUntil sellingPriceMinor discountMinor catalogVersion negotiationRules deletedAt")
       .lean();
     if (!product || !isOnSale(product))
       throw new HttpError(
@@ -389,30 +415,53 @@ export class CartService {
       );
     let unitPriceMinor = Number(item.unitPriceMinor || 0);
     let dropQuote = false;
+    let refreshVersion = false;
+    let attached: { _id: unknown; version?: number } | undefined;
+    const quoteOwner = owner.userId ?? owner.assistedCustomerId;
     if (item.quoteId) {
       const quote = await NegotiatedQuote.findOne({
         _id: item.quoteId,
-        customerId: owner.userId,
+        customerId: quoteOwner,
         productId: item.productId,
-        ...(item.variantId ? { variantId: item.variantId } : {}),
         status: NegotiatedQuoteStatus.ACTIVE,
         expiresAt: { $gt: new Date() },
       })
-        .select("agreedPriceMinor quantity")
+        .select("_id publicId customerId negotiationId agreedPriceMinor")
         .lean();
-      if (!quote)
+      const cancelled = quote
+        ? null
+        : await NegotiatedQuote.exists({ _id: item.quoteId, status: NegotiatedQuoteStatus.CANCELLED });
+      if (!quote && !cancelled)
         throw new HttpError(
           409,
           "Your negotiated price has expired",
           undefined,
           "NEGOTIATION_QUOTE_EXPIRED",
         );
-      if (Number(quote.quantity) === quantity) unitPriceMinor = Number(quote.agreedPriceMinor);
-      else {
-        // The agreed price was for a specific quantity. A different quantity goes back to the list price
-        // instead of quietly keeping the discount.
+      const resolution = quote ? resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product)) : null;
+      if (quote && resolution?.valid) {
+        // The locked price holds at any quantity until it expires.
+        unitPriceMinor = resolution.unitPriceMinor;
+      } else {
+        if (quote && resolution && !resolution.valid) await voidQuote(quote as never, resolution.reason);
+        // A cancelled quote no longer applies: the line goes back to the list price instead of quietly keeping it.
         dropQuote = true;
         unitPriceMinor = Number(product.sellingPriceMinor) - Number(product.discountMinor || 0);
+      }
+      // The line was just re-priced from the live product, so it is current again.
+      refreshVersion = true;
+    } else if (quoteOwner) {
+      // A price locked after this line was added applies to it as well.
+      const quote = await this.activeQuoteFor(quoteOwner, item.productId);
+      if (quote) {
+        const resolution = resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product));
+        if (resolution.valid) {
+          unitPriceMinor = resolution.unitPriceMinor;
+          attached = { _id: quote._id, version: quote.version };
+          refreshVersion = true;
+        } else {
+          await voidQuote(quote as never, resolution.reason);
+        }
       }
     }
     const updated = await CartItem.findOneAndUpdate(
@@ -424,6 +473,8 @@ export class CartService {
           unitPrice: unitPriceMinor / 100,
           totalPriceMinor: quantity * unitPriceMinor,
           totalPrice: (quantity * unitPriceMinor) / 100,
+          ...(refreshVersion ? { productVersion: Number(product.catalogVersion || 1) } : {}),
+          ...(attached ? { quoteId: String(attached._id), quoteVersion: attached.version || 1 } : {}),
         },
         ...(dropQuote ? { $unset: { quoteId: 1, quoteVersion: 1 } } : {}),
       },
@@ -486,6 +537,49 @@ export class CartService {
     return this.finishMutation(owner, cartId, undefined, options?.deferRecalculation === true);
   }
 
+  /** The customer's best still-valid locked price for a product, if any. */
+  private activeQuoteFor(customerId: string, productId: string) {
+    return NegotiatedQuote.findOne({
+      customerId,
+      productId,
+      status: NegotiatedQuoteStatus.ACTIVE,
+      expiresAt: { $gt: new Date() },
+    })
+      .sort({ agreedPriceMinor: 1 })
+      .select("_id publicId customerId negotiationId agreedPriceMinor version")
+      .lean({ virtuals: true });
+  }
+
+  /**
+   * Called when a price has just been locked: lines for that product already in the customer's cart move to the
+   * locked price right away, whatever their quantity or option. Best effort; a failure never undoes the lock.
+   */
+  async applyLockedPrice(customerId: string, quote: { _id: unknown; productId: string; agreedPriceMinor: number; version?: number }) {
+    const cart = await Cart.findOne({ customerId, status: "active", isCheckedOut: false }).select("_id publicId").lean({ virtuals: true });
+    if (!cart) return 0;
+    const product = await Product.findById(quote.productId)
+      .select("status availabilityStatus availabilityValidUntil sellingPriceMinor discountMinor catalogVersion negotiationRules deletedAt")
+      .lean();
+    if (!product) return 0;
+    const resolution = resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product));
+    if (!resolution.valid) return 0;
+    const lines = await CartItem.find({ cartId: String(cart._id), productId: quote.productId, $or: [{ quoteId: { $exists: false } }, { quoteId: null }] })
+      .select("_id quantity")
+      .lean();
+    for (const line of lines) {
+      const total = resolution.unitPriceMinor * Number(line.quantity);
+      await CartItem.updateOne(
+        { _id: line._id },
+        { $set: { quoteId: String(quote._id), quoteVersion: quote.version || 1, unitPriceMinor: resolution.unitPriceMinor, unitPrice: resolution.unitPriceMinor / 100, totalPriceMinor: total, totalPrice: total / 100, productVersion: Number(product.catalogVersion || 1) } },
+      );
+    }
+    if (lines.length) {
+      const updated = await Cart.findOneAndUpdate({ _id: cart._id }, { $inc: { version: 1 } }, { returnDocument: "after" }).select("version").lean();
+      publishRealtime({ type: "cart.updated", entityId: cart.publicId || String(cart._id), version: Number(updated?.version || 1) }, { accountId: customerId });
+    }
+    return lines.length;
+  }
+
   async recalculate(cartId: string, existingCart?: any) {
     const [cart, items] = await Promise.all([
       existingCart
@@ -506,7 +600,7 @@ export class CartService {
       productIds.length
         ? Product.find({ _id: { $in: productIds } })
             .select(
-              "_id publicId hookId title slug images marketId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus customerAvailabilityNote",
+              "_id publicId hookId title slug images marketId sellingPriceMinor discountMinor currency catalogVersion status availabilityStatus availabilityValidUntil negotiationRules deletedAt customerAvailabilityNote",
             )
             .lean({ virtuals: true })
         : [],
@@ -521,7 +615,7 @@ export class CartService {
             .lean({ virtuals: true })
         : [],
       NegotiatedQuote.find({ _id: { $in: items.map((item) => item.quoteId).filter(Boolean) } })
-        .select('_id publicId originalPriceMinor agreedPriceMinor expiresAt status')
+        .select('_id publicId originalPriceMinor agreedPriceMinor expiresAt status voidReason')
         .lean({ virtuals: true }),
     ]);
     const marketIds = [...new Set([...items.map((item) => item.marketId), ...products.map((product) => product.marketId)].filter((value): value is string => Boolean(value)))];
@@ -545,10 +639,29 @@ export class CartService {
       const blockingReasons: string[] = [];
       if (!product || !isOnSale(product))
         blockingReasons.push("RUNNER_CONFIRMATION_REQUIRED");
-      if (product && product.catalogVersion !== item.productVersion)
+      const quote = item.quoteId ? quoteMap.get(item.quoteId) : undefined;
+      const resolution =
+        product && quote && quote.status === NegotiatedQuoteStatus.ACTIVE
+          ? resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product))
+          : undefined;
+      if (quote && (quote.status === NegotiatedQuoteStatus.CANCELLED || (resolution && !resolution.valid))) {
+        // The negotiated price no longer stands. The customer re-confirms the line (same quantity) to continue.
+        blockingReasons.push("NEGOTIATED_PRICE_VOIDED");
+      } else if (product && product.catalogVersion !== item.productVersion && !resolution?.valid) {
+        // A quoted line is judged on price, not on every unrelated catalogue edit.
         blockingReasons.push("PRODUCT_CHANGED");
+      }
+      // When the list price fell below the agreed price the customer pays the lower one.
+      const repriced = resolution?.valid && resolution.reason === "PRICE_DROPPED" ? resolution.unitPriceMinor : undefined;
       const enrichedItem = {
         ...item,
+        ...(repriced
+          ? {
+              unitPriceMinor: repriced,
+              totalPriceMinor: repriced * Number(item.quantity),
+              priceNote: "PRICE_DROPPED",
+            }
+          : {}),
         productId: product?.publicId || product?.hookId || item.productId,
         publicStateId: stateMap.get(String(item.stateId))?.publicId,
         marketId: item.marketId || product?.marketId,
@@ -557,9 +670,12 @@ export class CartService {
         negotiatedQuote: item.quoteId && quoteMap.get(item.quoteId) ? {
           id: quoteMap.get(item.quoteId)!.publicId,
           originalPriceMinor: quoteMap.get(item.quoteId)!.originalPriceMinor,
-          agreedPriceMinor: quoteMap.get(item.quoteId)!.agreedPriceMinor,
+          agreedPriceMinor: repriced ?? quoteMap.get(item.quoteId)!.agreedPriceMinor,
           expiresAt: quoteMap.get(item.quoteId)!.expiresAt,
           status: quoteMap.get(item.quoteId)!.status,
+          ...(quoteMap.get(item.quoteId)!.status === NegotiatedQuoteStatus.CANCELLED || (resolution && !resolution.valid)
+            ? { status: NegotiatedQuoteStatus.CANCELLED, voidReason: resolution && !resolution.valid ? resolution.reason : (quoteMap.get(item.quoteId) as { voidReason?: string }).voidReason }
+            : {}),
         } : undefined,
         blockingReasons,
         checkoutEligible: blockingReasons.length === 0,

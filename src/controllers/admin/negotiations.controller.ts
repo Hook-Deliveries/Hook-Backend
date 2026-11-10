@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { azureOpenAIConfig } from '@config/azure-openai';
 import { NegotiationStatus, ScopeType } from '@lib/constants';
 import { Market } from '@models/platform/network.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
@@ -30,6 +31,7 @@ function safeSession(session: any, product?: any, includeTranscript = false) {
     offerCount: session.offerCount,
     maximumOffers: session.maximumOffers,
     lastDecision: session.lastDecision || null,
+    endReason: session.endReason || null,
     agreedPriceMinor: session.agreedPriceMinor || null,
     language: session.language || 'english',
     providerFallback: Boolean((session.providerTelemetry || []).some((entry: any) => entry.failed)),
@@ -115,7 +117,7 @@ export class AdminNegotiationsController {
 
   settings = async (_req: Request, res: Response) => {
     const settings = await CommerceSettings.findOne({ key: 'commerce' })
-      .select('negotiationEnabled negotiationSessionMode negotiationSessionMinutes negotiationMaximumOffers negotiationQuoteMinutes negotiationAzureWordingEnabled updatedAt')
+      .select('negotiationEnabled negotiationSessionMode negotiationSessionMinutes negotiationMaximumOffers negotiationQuoteMinutes negotiationAzureWordingEnabled negotiationCooldownMinutes negotiationMaxSessionsPerDay updatedAt')
       .lean();
     sendSuccess(res, {
       enabled: settings?.negotiationEnabled !== false,
@@ -124,7 +126,11 @@ export class AdminNegotiationsController {
       maximumOffers: settings?.negotiationMaximumOffers || 3,
       quoteMinutes: settings?.negotiationQuoteMinutes || 30,
       azureWordingEnabled: settings?.negotiationAzureWordingEnabled !== false,
-      providerConfigured: Boolean(process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_ENDPOINT && process.env.AZURE_OPENAI_DEPLOYMENT_NAME && process.env.AZURE_OPENAI_API_VERSION),
+      cooldownMinutes: settings?.negotiationCooldownMinutes ?? 30,
+      maxSessionsPerDay: settings?.negotiationMaxSessionsPerDay ?? 3,
+      providerConfigured: azureOpenAIConfig().configured,
+      // Names only: never the values.
+      providerMissing: azureOpenAIConfig().missing,
       updatedAt: settings?.updatedAt,
     });
   };
@@ -140,6 +146,8 @@ export class AdminNegotiationsController {
         negotiationMaximumOffers: req.body.maximumOffers,
         negotiationQuoteMinutes: req.body.quoteMinutes,
         negotiationAzureWordingEnabled: req.body.azureWordingEnabled,
+        ...(req.body.cooldownMinutes !== undefined ? { negotiationCooldownMinutes: req.body.cooldownMinutes } : {}),
+        ...(req.body.maxSessionsPerDay !== undefined ? { negotiationMaxSessionsPerDay: req.body.maxSessionsPerDay } : {}),
         updatedBy: req.user!.sub,
       } },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { onSaleFilter } from "@lib/product-availability";
+import { withOnSale } from "@lib/product-availability";
 import mongoose from 'mongoose';
 import { AccountType, NegotiatedQuoteStatus, NegotiationStatus, ProductAvailabilityStatus, ProductStatus } from '@lib/constants';
 import { NegotiatedQuote, ProductVariant } from '@models/catalog/catalog.model';
@@ -8,14 +8,19 @@ import { Negotiation } from '@models/negotiations/negotiation.model';
 import { Product } from '@models/products/product.model';
 import { User } from '@models/users/user.model';
 import { nextPublicId } from '@modules/platform';
-import { AzureNegotiationService, detectNegotiationLanguage, assertAzureConfigured } from '@modules/negotiation/azure-negotiation.service';
+import { AzureNegotiationService, detectNegotiationLanguage, assertAzureConfigured, fallbackPhrase, negotiationUnavailable } from '@modules/negotiation/azure-negotiation.service';
 import { negotiationContext } from '@modules/negotiation/negotiation-context.service';
 import { negotiationWriteFence } from '@lib/negotiation-execution';
 import { PricingEngine } from '@modules/catalog';
+import type { PricingDecision } from '@modules/catalog/pricing-engine.service';
+import { closeSessionForProduct, reconcileQuote } from '@modules/negotiation/negotiation-reconcile.service';
+import { assertMayStartNegotiation, MAX_CHAT_TURNS_PER_SESSION } from '@modules/negotiation/negotiation-abuse.service';
+import { clampToLive, deriveLiveRules, loadLiveRules, pricingInputs, type LiveRules } from '@modules/negotiation/negotiation-live-rules.service';
 import { createCommerceNotification } from '@modules/notifications';
 import { EmailService } from '@emails/email.service';
-import { HttpError } from '@utils/http';
-import { classifyNegotiationMessage, negotiationMoneyFromMessage } from '@lib/negotiation-intent';
+import { HttpError, isDuplicateKeyError } from '@utils/http';
+import { CartService } from '@modules/orders/cart.service';
+import { classifyNegotiationMessage, groundedOfferMinor, negotiationMoneyFromMessage } from '@lib/negotiation-intent';
 import { ensureLegacyProductOptions } from '@modules/catalog';
 import { publishRealtime } from '@modules/platform';
 
@@ -83,6 +88,11 @@ function present(session: any, response?: Record<string, unknown>, product?: any
     language: session.language || 'english',
     sessionMode: session.rulesSnapshot?.sessionMode || 'fixed',
     agreedPriceMinor: session.agreedPriceMinor,
+    lastDecision: session.lastDecision,
+    lastCounterPriceMinor: session.lastCounterPriceMinor,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    ...(session.endReason ? { endReason: session.endReason } : {}),
     product: productCard(product),
     ...response,
   };
@@ -121,12 +131,51 @@ export class NegotiationService {
     }
   }
 
+  /** Ends a live session whose product can no longer be negotiated, and tells the customer. */
+  private endUnavailable(session: any, reason: 'PRODUCT_UNAVAILABLE' | 'NEGOTIATION_DISABLED') {
+    return closeSessionForProduct(session, reason);
+  }
+
+  /** A quote as the customer should see it today: repriced when the list price dropped, cancelled when it can no longer stand. */
+  private async presentQuote(quote: any) {
+    let status = quote.status;
+    let agreedPriceMinor = quote.agreedPriceMinor;
+    let voidReason = quote.voidReason as string | undefined;
+    if (quote.status === NegotiatedQuoteStatus.ACTIVE) {
+      const resolution = await reconcileQuote(quote);
+      if (!resolution.valid) {
+        status = NegotiatedQuoteStatus.CANCELLED;
+        voidReason = resolution.reason;
+      } else {
+        agreedPriceMinor = resolution.unitPriceMinor;
+      }
+    }
+    return {
+      id: quote.publicId,
+      agreedPriceMinor,
+      originalPriceMinor: quote.originalPriceMinor,
+      expiresAt: quote.expiresAt,
+      status,
+      ...(voidReason ? { voidReason } : {}),
+    };
+  }
+
+  /** The rules as they are now. A session cannot continue once the product is off sale or no longer negotiable. */
+  private async liveFor(session: any): Promise<LiveRules> {
+    const live = await loadLiveRules(session.productId, session.variantId);
+    if (!live.onSale || !live.enabled) {
+      await this.endUnavailable(session, live.onSale ? 'NEGOTIATION_DISABLED' : 'PRODUCT_UNAVAILABLE');
+      throw new HttpError(409, 'This product is no longer available for negotiation', undefined, 'NEGOTIATION_PRODUCT_UNAVAILABLE');
+    }
+    return live;
+  }
+
   async start(identity: NegotiationIdentity, input: { productId: string; variantId: string; quantity: number; message?: string }) {
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).lean();
-    assertAzureConfigured(settings?.negotiationEnabled !== false && settings?.negotiationAzureWordingEnabled !== false);
+    // Pricing is deterministic and the model only words replies, so starting never waits on the AI provider.
+    if (settings?.negotiationEnabled === false) throw negotiationUnavailable();
     const product = await Product.findOne({
-      ...identifier(input.productId),
-      ...onSaleFilter(),
+      ...withOnSale(identifier(input.productId)),
       'negotiationRules.enabled': true,
       deletedAt: { $exists: false },
     }).lean({ virtuals: true });
@@ -151,20 +200,46 @@ export class NegotiationService {
     if (active) {
       throw new HttpError(409, 'You already have an active negotiation for this product option', present(active), 'ACTIVE_NEGOTIATION_EXISTS');
     }
-    const rules = product.negotiationRules;
-    if (
-      !rules?.minimumNegotiablePriceMinor
-      || rules.maximumDiscountMinor === undefined
-      || !product.sellingPriceMinor
-    ) {
+    // A customer who already holds a valid locked price for this product uses it (at any quantity or option)
+    // instead of negotiating again.
+    const heldQuote = await NegotiatedQuote.findOne({
+      customerId: identity.customerId,
+      productId: product._id.toString(),
+      status: NegotiatedQuoteStatus.ACTIVE,
+      expiresAt: { $gt: new Date() },
+    }).lean({ virtuals: true });
+    if (heldQuote) {
+      const shown = await this.presentQuote(heldQuote);
+      if (shown.status === NegotiatedQuoteStatus.ACTIVE) {
+        throw new HttpError(409, 'You already have a locked price for this product', { quote: shown }, 'ACTIVE_QUOTE_EXISTS');
+      }
+    }
+    // Re-rolling for a better price is limited. Partner-assisted sessions are the Partner's counter work, not a retry.
+    if (!identity.partnerId) {
+      await assertMayStartNegotiation(identity.customerId, product._id.toString(), variant._id.toString(), {
+        cooldownMinutes: settings?.negotiationCooldownMinutes,
+        maxSessionsPerDay: settings?.negotiationMaxSessionsPerDay,
+      });
+    }
+    const live = deriveLiveRules(product);
+    if (!live.enabled) {
       throw new HttpError(409, 'Negotiation is not configured for this product', undefined, 'NEGOTIATION_DISABLED');
+    }
+    const inputs = pricingInputs(live);
+    // The list price is already at the lowest price the business accepts, so there is nothing to negotiate.
+    if (!inputs.needed) {
+      throw new HttpError(409, 'This product is already at its best price', undefined, 'NEGOTIATION_NOT_NEEDED');
     }
     const maximumOffers = Math.min(10, Math.max(1, settings?.negotiationMaximumOffers || 3));
     const sessionMode = settings?.negotiationSessionMode || 'fixed';
     const sessionMinutes = settings?.negotiationSessionMinutes || 10;
     const quoteMinutes = settings?.negotiationQuoteMinutes || 30;
     const language = detectNegotiationLanguage(input.message);
-    await this.language.ready();
+    // A session that ran out of time but has not been swept yet must not block (or collide with) the new one.
+    await Negotiation.updateMany(
+      { ...identityFilter(identity), productId: product._id.toString(), variantId: variant._id.toString(), quantity: input.quantity, status: NegotiationStatus.ACTIVE, expiresAt: { $lte: new Date() } },
+      { $set: { status: NegotiationStatus.EXPIRED } },
+    );
     const publicId = await nextPublicId('negotiation');
     const session = await Negotiation.create({
       publicId,
@@ -184,9 +259,11 @@ export class NegotiationService {
       transcript: input.message ? [{ id: randomUUID(), sequence: 1, kind: 'text', role: 'customer', message: input.message, createdAt: new Date() }] : [],
       language,
       rulesSnapshot: {
-        sellingPriceMinor: product.sellingPriceMinor,
-        minimumNegotiablePriceMinor: rules.minimumNegotiablePriceMinor,
-        maximumDiscountMinor: rules.maximumDiscountMinor,
+        // Priced on what the customer would pay today (selling price minus discount).
+        priceBasis: 'effective',
+        sellingPriceMinor: inputs.sellingPriceMinor,
+        minimumNegotiablePriceMinor: inputs.minimumNegotiablePriceMinor,
+        maximumDiscountMinor: inputs.maximumDiscountMinor,
         maximumOffers,
         sessionMode,
         sessionMinutes,
@@ -195,6 +272,10 @@ export class NegotiationService {
       },
       ...(sessionMode === 'fixed' ? { expiresAt: new Date(Date.now() + sessionMinutes * 60 * 1000) } : {}),
       version: 1,
+    }).catch((error) => {
+      // The unique index on live sessions caught a concurrent start for the same item.
+      if (isDuplicateKeyError(error)) throw new HttpError(409, 'You already have an active negotiation for this product option', undefined, 'ACTIVE_NEGOTIATION_EXISTS');
+      throw error;
     });
     return present(session.toJSON());
   }
@@ -206,6 +287,8 @@ export class NegotiationService {
     idempotencyKey: string,
     customerMessage?: string,
     resolvedIntent?: 'offer' | 'conversation',
+    // What the model understood from the message. Deliberately kept out of the idempotency hash.
+    understood?: { offerMinor?: number },
   ) {
     if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200) {
       throw new HttpError(400, 'A valid Idempotency-Key header is required', undefined, 'VALIDATION_ERROR');
@@ -231,16 +314,44 @@ export class NegotiationService {
       throw new HttpError(410, 'This negotiation has expired', undefined, 'NEGOTIATION_QUOTE_EXPIRED');
     }
     if (!session.rulesSnapshot) throw new HttpError(409, 'Negotiation pricing snapshot is unavailable', undefined, 'PRICING_BOUNDARY_VIOLATION');
+    // Admin can change prices, rules or availability at any time: every offer is judged on today's rules.
+    const live = await this.liveFor(session);
+    const inputs = pricingInputs(live);
+    const stored = session.rulesSnapshot;
+    const priceChange = stored.priceBasis === 'effective' && inputs.sellingPriceMinor !== Number(stored.sellingPriceMinor)
+      ? { fromMinor: Number(stored.sellingPriceMinor), toMinor: inputs.sellingPriceMinor }
+      : undefined;
+    const snapshot: NonNullable<typeof session.rulesSnapshot> = {
+      ...stored,
+      priceBasis: 'effective',
+      sellingPriceMinor: inputs.sellingPriceMinor,
+      minimumNegotiablePriceMinor: inputs.minimumNegotiablePriceMinor,
+      maximumDiscountMinor: inputs.maximumDiscountMinor,
+    };
+    const liveSession = { ...session, rulesSnapshot: snapshot };
     const settings = await CommerceSettings.findOne({ key: 'commerce' }).select('negotiationEnabled negotiationAzureWordingEnabled').lean();
-    assertAzureConfigured(settings?.negotiationEnabled !== false && settings?.negotiationAzureWordingEnabled !== false && session.rulesSnapshot.azureWordingEnabled !== false);
-    const intent = submittedPriceMinor ? 'offer' : resolvedIntent || (await this.language.shoppingIntent(customerMessage || '')).intent;
-    const offeredPriceMinor = submittedPriceMinor || (intent === 'offer' ? amountFromMessage(customerMessage) : undefined);
+    if (settings?.negotiationEnabled === false) throw negotiationUnavailable();
+    // A priced offer is decided by the pricing engine; only free-text messages need the AI provider to be available.
+    if (!submittedPriceMinor) assertAzureConfigured(settings?.negotiationAzureWordingEnabled !== false && session.rulesSnapshot.azureWordingEnabled !== false);
+    let intent: string | undefined = submittedPriceMinor ? 'offer' : resolvedIntent;
+    let understoodOfferMinor = understood?.offerMinor;
+    if (!intent) {
+      const hint = await this.language.shoppingIntent(customerMessage || '', session.quantity);
+      intent = hint.intent;
+      if (hint.intent === 'offer') understoodOfferMinor = groundedOfferMinor(customerMessage || '', hint.offerNaira, hint.priceIsTotal, session.quantity);
+    }
+    const offeredPriceMinor = submittedPriceMinor || understoodOfferMinor || (intent === 'offer' ? amountFromMessage(customerMessage) : undefined);
     if (!offeredPriceMinor) {
+      const chatTurns = (session.transcript || []).filter((entry) => entry.role === 'customer' && !entry.offeredPriceMinor).length;
+      if (chatTurns >= MAX_CHAT_TURNS_PER_SESSION) {
+        throw new HttpError(429, 'This conversation is getting long. Make an offer or start a new one.', undefined, 'NEGOTIATION_MESSAGE_LIMIT');
+      }
       const product = await Product.findById(session.productId)
         .select('title description sellingPriceMinor discountMinor')
         .lean();
       const language = detectNegotiationLanguage(customerMessage);
       const guidance = await this.language.guide({
+        quantity: session.quantity,
         customerMessage: customerMessage || '',
         language,
         productTitle: product?.title || 'this product',
@@ -294,15 +405,23 @@ export class NegotiationService {
         .filter((entry) => entry.role === 'customer')
         .map((entry) => Number(entry.offeredPriceMinor || 0)),
     );
-    const decision = this.pricing.decide({
-      ...session.rulesSnapshot,
-      customerOfferMinor: offeredPriceMinor,
-      offerNumber,
-      currency: session.currency,
-      previousCustomerOfferMinor,
-      previousCounterPriceMinor: Number(session.lastCounterPriceMinor || 0),
-    });
-    const priorAgreedPrice = Number(session.agreedPriceMinor || 0);
+    // Earlier counters and agreed prices are pulled back inside what is allowed today.
+    const priorCounterPrice = clampToLive(Number(session.lastCounterPriceMinor || 0), live);
+    const priorAgreedPrice = clampToLive(Number(session.agreedPriceMinor || 0), live);
+    const decision: PricingDecision = inputs.needed
+      ? this.pricing.decide({
+        sellingPriceMinor: inputs.sellingPriceMinor,
+        minimumNegotiablePriceMinor: inputs.minimumNegotiablePriceMinor,
+        maximumDiscountMinor: inputs.maximumDiscountMinor,
+        maximumOffers: Number(snapshot.maximumOffers),
+        customerOfferMinor: offeredPriceMinor,
+        offerNumber,
+        currency: session.currency,
+        previousCustomerOfferMinor,
+        previousCounterPriceMinor: priorCounterPrice,
+      })
+      // The price dropped to (or below) the minimum mid-session: the list price is the best price on offer.
+      : { decision: 'ACCEPT', acceptedPriceMinor: inputs.sellingPriceMinor, reasonCode: 'LIST_PRICE_AT_FLOOR', remainingOffers: 0 };
     const acceptedPrice = Number(decision.acceptedPriceMinor || 0);
     const bestAgreedPrice = acceptedPrice
       ? priorAgreedPrice
@@ -310,7 +429,6 @@ export class NegotiationService {
         : acceptedPrice
       : priorAgreedPrice;
     const offersExhausted = decision.remainingOffers === 0;
-    const priorCounterPrice = Number(session.lastCounterPriceMinor || 0);
     const availablePrices = [bestAgreedPrice, priorCounterPrice, Number(decision.counterPriceMinor || 0)]
       .filter((value) => value > 0);
     const bestAvailablePrice = availablePrices.length ? Math.min(...availablePrices) : 0;
@@ -322,20 +440,34 @@ export class NegotiationService {
         : NegotiationStatus.ACTIVE;
     const language = detectNegotiationLanguage(customerMessage);
     const product = await Product.findById(session.productId).select('title description').lean();
-    const wording = await this.language.phrase(decision, {
+    const wordingContext = {
+      quantity: session.quantity,
       customerMessage,
       language,
       quoteMinutes: session.rulesSnapshot.quoteMinutes || 30,
       enabled: session.rulesSnapshot.azureWordingEnabled !== false,
-      playfulLowOffer: offeredPriceMinor < Number(session.rulesSnapshot.sellingPriceMinor || 0) * 0.3,
+      playfulLowOffer: offeredPriceMinor < inputs.sellingPriceMinor * 0.3,
       productTitle: product?.title,
       productDescription: product?.description,
       conversation: (session.transcript || []).slice(-8).map((entry) => ({ role: entry.role, message: entry.message })),
       remainingOffers: decision.remainingOffers,
       bestPriceMinor: shouldLockBestPrice ? bestAvailablePrice : bestAgreedPrice || decision.counterPriceMinor,
       finalized: responseStatus !== NegotiationStatus.ACTIVE,
-      facts: await negotiationContext(session),
-    });
+      facts: await negotiationContext(liveSession),
+    };
+    let wording: Awaited<ReturnType<AzureNegotiationService['phrase']>>;
+    try {
+      wording = await this.language.phrase(decision, wordingContext);
+    } catch (error) {
+      // The decision and price are already settled. If the AI provider is down, say so with fixed wording instead of
+      // failing the customer's offer.
+      if (!(submittedPriceMinor && error instanceof HttpError && error.code === 'NEGOTIATION_UNAVAILABLE')) throw error;
+      wording = {
+        message: fallbackPhrase(decision, { language, quoteMinutes: wordingContext.quoteMinutes, remainingOffers: decision.remainingOffers, finalized: wordingContext.finalized, approvedPriceMinor: wordingContext.bestPriceMinor, quantity: session.quantity }),
+        telemetry: { provider: 'fallback', failed: true, failureCode: 'PROVIDER_UNAVAILABLE' },
+        fallbackUsed: true,
+      };
+    }
     const responseMessage = wording.message;
     const response: Record<string, unknown> = {
       negotiationId: session.publicId,
@@ -349,6 +481,7 @@ export class NegotiationService {
           ? { agreedPriceMinor: bestAgreedPrice }
           : {}),
       remainingOffers: decision.remainingOffers,
+      ...(priceChange ? { priceChanged: priceChange } : {}),
       status: responseStatus,
       canContinue: responseStatus === NegotiationStatus.ACTIVE && decision.remainingOffers > 0,
       providerFallback: wording.fallbackUsed,
@@ -359,7 +492,7 @@ export class NegotiationService {
     try {
       await transaction.withTransaction(async () => {
         if (shouldLockBestPrice) {
-          quote = await this.createQuote(session, identity.customerId, bestAvailablePrice, transaction);
+          quote = await this.createQuote(liveSession, identity.customerId, bestAvailablePrice, transaction, live);
           response.quoteId = quote.publicId;
           response.quoteExpiresAt = quote.expiresAt;
         }
@@ -369,6 +502,10 @@ export class NegotiationService {
             $set: {
               status: response.status,
               language,
+              'rulesSnapshot.priceBasis': 'effective',
+              'rulesSnapshot.sellingPriceMinor': inputs.sellingPriceMinor,
+              'rulesSnapshot.minimumNegotiablePriceMinor': inputs.minimumNegotiablePriceMinor,
+              'rulesSnapshot.maximumDiscountMinor': inputs.maximumDiscountMinor,
               lastDecision: decision.decision,
               lastCounterPriceMinor: decision.counterPriceMinor,
               ...(shouldLockBestPrice
@@ -382,8 +519,9 @@ export class NegotiationService {
             $push: {
               transcript: {
                 $each: [
-                  { id: randomUUID(), sequence: session.transcript.length + 1, kind: 'text', requestId: idempotencyKey, role: 'customer', message: customerMessage || 'Customer submitted an offer.', offeredPriceMinor, createdAt: new Date() },
-                  { id: randomUUID(), sequence: session.transcript.length + 2, kind: 'text', role: 'hook', message: responseMessage, decision: decision.decision, createdAt: new Date() },
+                  ...(priceChange ? [{ id: randomUUID(), sequence: session.transcript.length + 1, kind: 'text', role: 'hook', message: `The price of this item changed to ₦${Math.round(priceChange.toMinor / 100).toLocaleString('en-NG')}. Your offer is judged on the new price.`, createdAt: new Date() }] : []),
+                  { id: randomUUID(), sequence: session.transcript.length + (priceChange ? 2 : 1), kind: 'text', requestId: idempotencyKey, role: 'customer', message: customerMessage || 'Customer submitted an offer.', offeredPriceMinor, createdAt: new Date() },
+                  { id: randomUUID(), sequence: session.transcript.length + (priceChange ? 3 : 2), kind: 'text', role: 'hook', message: responseMessage, decision: decision.decision, ...(decision.counterPriceMinor ? { counterPriceMinor: decision.counterPriceMinor } : {}), ...(decision.acceptedPriceMinor ? { acceptedPriceMinor: decision.acceptedPriceMinor } : {}), createdAt: new Date() },
                 ],
               },
               providerTelemetry: wording.telemetry,
@@ -395,7 +533,10 @@ export class NegotiationService {
         if (!updated) throw new HttpError(409, 'The negotiation changed before this offer completed', undefined, 'IDEMPOTENCY_CONFLICT');
       });
       if (shouldLockBestPrice && identity.customerId && quote) {
-        await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestAvailablePrice, quote.expiresAt);
+        // The offer is committed; a notification problem must never turn it into an error for the customer.
+        await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestAvailablePrice, quote.expiresAt).catch(() => undefined);
+        // The locked price applies to this product's lines already in the cart straight away.
+        await new CartService().applyLockedPrice(identity.customerId, quote).catch(() => undefined);
       }
       return response;
     } finally {
@@ -431,10 +572,12 @@ export class NegotiationService {
     const prices = [session.agreedPriceMinor, session.lastCounterPriceMinor]
       .map((value) => Number(value || 0))
       .filter((value) => value > 0);
-    const bestPrice = prices.length ? Math.min(...prices) : 0;
-    if (!bestPrice || !session.rulesSnapshot) {
+    if (!prices.length || !session.rulesSnapshot) {
       throw new HttpError(409, 'There is no agreed price to use yet', undefined, 'INVALID_STATE_TRANSITION');
     }
+    // Lock the best price that is still allowed today, never one the product has since moved away from.
+    const live = await this.liveFor(session);
+    const bestPrice = clampToLive(Math.min(...prices), live);
     const quoteMinutes = Number(session.rulesSnapshot.quoteMinutes || 30);
     if (session.expiresAt && session.expiresAt <= new Date()) {
       await Negotiation.updateOne({ _id: session._id }, { $set: { status: NegotiationStatus.EXPIRED } });
@@ -444,7 +587,7 @@ export class NegotiationService {
     try {
       let quote: any;
       await transaction.withTransaction(async () => {
-        quote = await this.createQuote(session, identity.customerId, bestPrice, transaction);
+        quote = await this.createQuote(session, identity.customerId, bestPrice, transaction, live);
         const updated = await Negotiation.updateOne(
           { _id: session._id, version: session.version, status: NegotiationStatus.ACTIVE },
           {
@@ -469,7 +612,8 @@ export class NegotiationService {
         );
         if (!updated.modifiedCount) throw new HttpError(409, 'Negotiation state changed before acceptance', undefined, 'INVALID_STATE_TRANSITION');
       });
-      await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestPrice, quote.expiresAt);
+      await this.notifyQuoteAgreed({ publicId: session.publicId, productId: session.productId, customerId: identity.customerId }, bestPrice, quote.expiresAt).catch(() => undefined);
+      await new CartService().applyLockedPrice(identity.customerId, quote).catch(() => undefined);
       publishRealtime({ type: 'negotiation.updated', entityId: session.publicId }, { accountId: identity.customerId });
       return {
         negotiationId: session.publicId,
@@ -509,9 +653,9 @@ export class NegotiationService {
       session.variantId ? ProductVariant.findById(session.variantId).select('publicId').lean() : null,
     ]);
     let quote;
-    if (session.quoteId) quote = await NegotiatedQuote.findById(session.quoteId).select('publicId agreedPriceMinor originalPriceMinor expiresAt status').lean();
+    if (session.quoteId) quote = await NegotiatedQuote.findById(session.quoteId).select('publicId customerId negotiationId productId variantId agreedPriceMinor originalPriceMinor expiresAt status voidReason').lean();
     const peopleNegotiating = await Negotiation.distinct('customerId', { productId: session.productId, status: NegotiationStatus.ACTIVE, $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: { $exists: false } }] });
-    return present(session, { peopleNegotiating: peopleNegotiating.length, variantId: variant?.publicId, ...(quote ? { quote: { id: quote.publicId, agreedPriceMinor: quote.agreedPriceMinor, originalPriceMinor: quote.originalPriceMinor, expiresAt: quote.expiresAt, status: quote.status } } : {}) }, product);
+    return present(session, { peopleNegotiating: peopleNegotiating.length, variantId: variant?.publicId, ...(quote ? { quote: await this.presentQuote(quote) } : {}) }, product);
   }
 
   async list(identity: NegotiationIdentity) {
@@ -555,18 +699,13 @@ export class NegotiationService {
         customerId: identity.customerId,
         status: NegotiatedQuoteStatus.ACTIVE,
         expiresAt: { $gt: new Date() },
-      }).select('publicId agreedPriceMinor originalPriceMinor expiresAt status').lean();
+      }).select('publicId customerId negotiationId productId variantId agreedPriceMinor originalPriceMinor expiresAt status voidReason').lean();
       if (quote) {
-        return present(acceptedSession, {
-          variantId: variant.publicId,
-          quote: {
-            id: quote.publicId,
-            agreedPriceMinor: quote.agreedPriceMinor,
-            originalPriceMinor: quote.originalPriceMinor,
-            expiresAt: quote.expiresAt,
-            status: quote.status,
-          },
-        }, product);
+        const shown = await this.presentQuote(quote);
+        // A quote cancelled by a product change is reported once on the session, never offered as a usable price.
+        if (shown.status === NegotiatedQuoteStatus.ACTIVE) {
+          return present(acceptedSession, { variantId: variant.publicId, quote: shown }, product);
+        }
       }
     }
     const session = await Negotiation.findOne({
@@ -580,7 +719,7 @@ export class NegotiationService {
     return session ? present(session, { variantId: variant.publicId }, product) : null;
   }
 
-  private async createQuote(session: any, customerId: string, agreedPriceMinor: number, mongoSession: mongoose.ClientSession) {
+  private async createQuote(session: any, customerId: string, agreedPriceMinor: number, mongoSession: mongoose.ClientSession, live: LiveRules) {
     const existing = await NegotiatedQuote.findOne({ negotiationId: session._id.toString() }).session(mongoSession);
     if (existing) return existing;
     const publicId = await nextPublicId('quote');
@@ -592,8 +731,9 @@ export class NegotiationService {
       variantId: session.variantId,
       quantity: session.quantity,
       currency: session.currency,
-      originalPriceMinor: session.rulesSnapshot.sellingPriceMinor,
+      originalPriceMinor: live.effectivePriceMinor,
       agreedPriceMinor,
+      productVersion: live.catalogVersion,
       expiresAt: new Date(Date.now() + Number(session.rulesSnapshot.quoteMinutes || 30) * 60 * 1000),
       status: NegotiatedQuoteStatus.ACTIVE,
     }], { session: mongoSession });

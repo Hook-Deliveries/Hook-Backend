@@ -3,6 +3,7 @@ import type { Server } from 'http';
 import mongoose from 'mongoose';
 import { createApp } from './app';
 import { assertSafeEnvironment } from './config/env';
+import { warmAppleKeys } from '@modules/identity/apple-auth.service';
 import { disconnectDatabase, initializeDatabase } from './config/data-source';
 import { ensurePlatformAccessCatalog } from './modules/platform/platform-bootstrap.service';
 import { startInProcessJobs, stopInProcessJobs } from './jobs/in-process';
@@ -94,6 +95,8 @@ async function bootstrap() {
   else if (redisStatus.state === 'unreachable') console.warn(`⚠️ Redis unreachable at ${redisStatus.target}: caching, shared rate limits and queues are off; MongoDB is used instead`);
   else console.log('ℹ️ Redis not configured: caching, shared rate limits and queues are off');
   printRuntimeServices();
+  // Fetch Apple's sign-in keys now, in the background, so the first Apple sign-in is not the one that waits for them.
+  warmAppleKeys();
   await initializeDatabase();
   await ensurePlatformAccessCatalog();
   // Schedulers and the outbox drain belong to the worker process

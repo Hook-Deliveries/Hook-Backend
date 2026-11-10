@@ -1798,7 +1798,7 @@ export class FulfilmentService {
       if (hub?.address && !hub.phone) {
         throw new HttpError(409, `${hub.name || 'This Hub'} has no contact phone number set. Add one under Hubs before booking with Fez.`, undefined, 'VALIDATION_ERROR');
       }
-      const bookingInput = { orderId: order.publicId, bookingIdempotencyKey: body.idempotencyKey, deliveryAddressSnapshot, totalMinor: order.totalMinor, weightGrams: consolidation.weightGrams, hub };
+      const bookingInput = { orderId: order.publicId, bookingIdempotencyKey: consolidation.publicId, deliveryAddressSnapshot, totalMinor: order.totalMinor, weightGrams: consolidation.weightGrams, hub };
       const fez = logisticsProvider('fez');
       fezQuoteMinor = await fez.quote(bookingInput).then((quote) => Number(quote.quoteMinor)).catch(() => undefined);
       fezBooking = await fez.book(bookingInput);
@@ -1822,6 +1822,26 @@ export class FulfilmentService {
     return shipment.toJSON();
   }
 
+  /** The order's status given every shipment on it, so one of several can't mark the whole order delivered. */
+  private async settleOrderForShipment(shipment: any, next: ShipmentStatus, session: mongoose.ClientSession) {
+    if (shipment.fulfilmentGroupId) {
+      const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
+        : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
+          : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
+      if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } }, { session });
+    }
+    // Read inside the transaction so concurrent deliveries of two shipments
+    // of one order each see the other's committed state, not a stale count.
+    const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').session(session).lean();
+    const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
+    const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
+    return next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
+      : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
+        : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
+          : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
+            : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+  }
+
   async updateShipment(actor: Actor, identifierValue: string, body: Record<string, any>) {
     const shipment = await Shipment.findOne(identifier(identifierValue)).lean({ virtuals: true }) as any;
     if (!shipment) throw new HttpError(404, 'Shipment not found', undefined, 'NOT_FOUND'); await assertStaffScope(actor, shipment.sourceStateId, shipment.hubId);
@@ -1830,26 +1850,12 @@ export class FulfilmentService {
     if (!Object.values(ShipmentStatus).includes(next)) throw new HttpError(400, 'Invalid shipment status', undefined, 'VALIDATION_ERROR');
     const allowed: Record<string, string[]> = { BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
     if (shipment.status !== next && !allowed[shipment.status]?.includes(next)) throw new HttpError(409, 'Invalid shipment status transition', { current: shipment.status, next }, 'INVALID_STATE_TRANSITION');
+    if (next === ShipmentStatus.CANCELLED && shipment.status !== next && shipment.provider === 'fez' && shipment.externalReference) await logisticsProvider('fez').cancel(shipment.externalReference);
     let orderStatus: CommerceOrderStatus | undefined;
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: body.version ?? shipment.version }, { $set: { status: next, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: actor.accountId, note: body.note } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (shipment.fulfilmentGroupId) {
-        const groupStatus = next === ShipmentStatus.DELIVERED ? 'DELIVERED'
-          : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? 'IN_TRANSIT'
-            : next === ShipmentStatus.RETURN_IN_TRANSIT ? 'ON_HOLD' : undefined;
-        if (groupStatus) await OrderFulfilmentGroup.updateOne({ publicId: shipment.fulfilmentGroupId }, { $set: { status: groupStatus, shipmentId: shipment.publicId } }, { session });
-      }
-      // Read inside the transaction so concurrent deliveries of two shipments
-      // of one order each see the other's committed state, not a stale count.
-      const allShipments = await Shipment.find({ orderId: shipment.orderId }).select('status').session(session).lean();
-      const deliveredCount = allShipments.filter((entry) => entry.status === ShipmentStatus.DELIVERED).length;
-      const movingCount = allShipments.filter((entry) => [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(entry.status)).length;
-      orderStatus = next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS
-        : deliveredCount === allShipments.length ? CommerceOrderStatus.DELIVERED
-          : deliveredCount > 0 ? CommerceOrderStatus.PARTIALLY_DELIVERED
-            : movingCount > 0 && allShipments.length > 1 ? CommerceOrderStatus.PARTIALLY_IN_TRANSIT
-              : movingCount > 0 ? CommerceOrderStatus.IN_TRANSIT : undefined;
+      orderStatus = await this.settleOrderForShipment(shipment, next, session);
       if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(orderStatus === CommerceOrderStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, actor.accountId) } }, { session });
       return moved;
     });
@@ -2404,7 +2410,35 @@ export class FulfilmentService {
     if (!eventId) throw new HttpError(400, 'Provider event id is required', undefined, 'VALIDATION_ERROR');
     if (['gig', 'fez'].includes(provider) && process.env[`LOGISTICS_${provider.toUpperCase()}_ENABLED`] !== 'true') throw new HttpError(503, `${provider.toUpperCase()} logistics integration is not enabled`, undefined, 'PROVIDER_NOT_READY');
     if (provider === 'simulated' && !isLogisticsSimulationEnabled()) throw new HttpError(503, 'Logistics simulation is not enabled', undefined, 'PROVIDER_NOT_READY');
-    if (!logisticsSignature(provider, payload, signature, timestamp)) throw new HttpError(401, 'Invalid logistics webhook signature', undefined, 'WEBHOOK_SIGNATURE_INVALID');
+    if (!logisticsSignature(provider, payload, signature, timestamp)) {
+      console.warn(`[logistics] ${provider} webhook signature rejected`, { orderNumber: payload.orderNumber, status: payload.status, signature, timestamp });
+      throw new HttpError(401, 'Invalid logistics webhook signature', undefined, 'WEBHOOK_SIGNATURE_INVALID');
+    }
+    return this.applyLogisticsEvent(provider, eventId, payload);
+  }
+
+  /** Webhooks can be lost or unverifiable, so active Fez shipments are also polled. */
+  async syncFezShipments() {
+    if (!isFezLogisticsEnabled()) return;
+    // ponytail: oldest 500 only, page through if active Fez shipments ever exceed that
+    const shipments = await Shipment.find({
+      provider: 'fez',
+      externalReference: { $exists: true },
+      status: { $in: [ShipmentStatus.BOOKED_WITH_PROVIDER, ShipmentStatus.AWAITING_PICKUP, ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY, ShipmentStatus.DELIVERY_FAILED, ShipmentStatus.RETURN_IN_TRANSIT] },
+    }).sort({ updatedAt: 1 }).limit(500).select('externalReference').lean() as any[];
+    const fez = logisticsProvider('fez');
+    for (const { externalReference } of shipments) {
+      try {
+        const tracked = await fez.track(externalReference);
+        const status = (tracked.order as { orderStatus?: string } | undefined)?.orderStatus;
+        if (status) await this.applyLogisticsEvent('fez', `${externalReference}:${status}`, { orderNumber: externalReference, status });
+      } catch (error) {
+        console.warn(`[logistics] Fez sync failed for ${externalReference}:`, error instanceof Error ? error.message : error);
+      }
+    }
+  }
+
+  private async applyLogisticsEvent(provider: string, eventId: string, payload: Record<string, unknown>) {
     const payloadHash = digest(JSON.stringify(payload));
     const normalizedProvider = provider as any;
     // Only a fully handled delivery is a duplicate. One left RECEIVED (crash,
@@ -2435,7 +2469,8 @@ export class FulfilmentService {
       if (!event) return { duplicate: true, event: existing };
     }
     try {
-    const shipmentValue = payload.shipmentId ? String(payload.shipmentId) : undefined;
+    const shipmentReference = payload.shipmentId || payload.orderNumber;
+    const shipmentValue = shipmentReference ? String(shipmentReference) : undefined;
     const shipment = shipmentValue
       ? await Shipment.findOne({ $or: [identifier(shipmentValue), { externalReference: shipmentValue }, { trackingNumber: shipmentValue }] } as any).lean({ virtuals: true }) as any
       : null;
@@ -2454,19 +2489,23 @@ export class FulfilmentService {
       // Fez's own, coarser status vocabulary (its docs don't fully enumerate it,
       // so this list may need extending once real webhook traffic is observed).
       PENDING_PICK_UP: ShipmentStatus.AWAITING_PICKUP,
+      PENDING_PICKUP: ShipmentStatus.AWAITING_PICKUP,
+      ASSIGNED_TO_A_RIDER: ShipmentStatus.AWAITING_PICKUP,
       DISPATCHED: ShipmentStatus.IN_TRANSIT,
+      FAILED_DELIVERY: ShipmentStatus.DELIVERY_FAILED,
       RETURNED: ShipmentStatus.RETURNED_TO_HOOK,
+      CANCELLED: ShipmentStatus.CANCELLED,
+      CANCELED: ShipmentStatus.CANCELLED,
     };
     const next = statusMap[statusKey];
     if (!shipment || !next) {
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'IGNORED', processedAt: new Date() } });
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
-    // IN_TRANSIT allows DELIVERED and RETURNED_TO_HOOK directly (not just via
-    // OUT_FOR_DELIVERY/DELIVERY_FAILED), and PICKED_UP allows RETURNED_TO_HOOK
-    // directly, because Fez's coarser status vocabulary has no "out for
-    // delivery" or "delivery failed" event of its own before Delivered/Returned.
-    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT', 'DELIVERED', 'RETURNED_TO_HOOK'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED'], DELIVERY_FAILED: ['RETURN_IN_TRANSIT'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
+    // Providers skip steps (Fez has no guaranteed "awaiting pickup" or "out for
+    // delivery" event), so any forward move is accepted. Refusing one would strand
+    // the shipment, because every later event would then be refused as well.
+    const allowed: Record<string, string[]> = { READY_FOR_BOOKING: ['BOOKED_WITH_PROVIDER'], BOOKING_PENDING: ['BOOKED_WITH_PROVIDER'], BOOKED_WITH_PROVIDER: ['AWAITING_PICKUP', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK', 'CANCELLED'], AWAITING_PICKUP: ['PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK', 'CANCELLED'], PICKED_UP: ['IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], IN_TRANSIT: ['OUT_FOR_DELIVERY', 'DELIVERY_FAILED', 'RETURN_IN_TRANSIT', 'DELIVERED', 'RETURNED_TO_HOOK'], OUT_FOR_DELIVERY: ['DELIVERED', 'DELIVERY_FAILED', 'RETURNED_TO_HOOK'], DELIVERY_FAILED: ['IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURN_IN_TRANSIT', 'RETURNED_TO_HOOK'], RETURN_IN_TRANSIT: ['RETURNED_TO_HOOK'] };
     if (shipment.status === next) {
       // Already in this state (e.g. the provider re-sent it under a new event id): nothing to apply.
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } });
@@ -2476,13 +2515,14 @@ export class FulfilmentService {
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'IGNORED', processedAt: new Date() } });
       return { duplicate: false, event: { ...event.toJSON(), status: 'IGNORED' }, accepted: false };
     }
-    const orderStatus = next === ShipmentStatus.DELIVERED ? CommerceOrderStatus.DELIVERED : next === ShipmentStatus.RETURN_IN_TRANSIT ? CommerceOrderStatus.RETURN_IN_PROGRESS : [ShipmentStatus.PICKED_UP, ShipmentStatus.IN_TRANSIT, ShipmentStatus.OUT_FOR_DELIVERY].includes(next) ? CommerceOrderStatus.IN_TRANSIT : undefined;
+    let orderStatus: CommerceOrderStatus | undefined;
     // Shipment, order and the event marker commit together, so a crash cannot
     // leave a moved shipment whose event is still "received".
     const updated = await this.atomically(async (session) => {
       const moved = await Shipment.findOneAndUpdate({ _id: shipment._id, version: shipment.version }, { $set: { status: next, trackingNumber: payload.trackingNumber ? String(payload.trackingNumber) : shipment.trackingNumber, pickedUpAt: next === ShipmentStatus.PICKED_UP ? new Date() : shipment.pickedUpAt, deliveredAt: next === ShipmentStatus.DELIVERED ? new Date() : shipment.deliveredAt, failedAt: next === ShipmentStatus.DELIVERY_FAILED ? new Date() : shipment.failedAt }, $push: { trackingEvents: { status: next, at: new Date(), actorId: `WEBHOOK:${provider}`, note: typeof payload.note === 'string' ? payload.note.slice(0, 500) : undefined } }, $inc: { version: 1 } }, { returnDocument: 'after', session }).lean({ virtuals: true });
       if (!moved) return null;
-      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(next === ShipmentStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
+      orderStatus = await this.settleOrderForShipment(shipment, next, session);
+      if (orderStatus) await Order.updateOne({ _id: shipment.orderId }, { $set: { commerceStatus: orderStatus, ...(orderStatus === CommerceOrderStatus.DELIVERED ? { deliveredAt: new Date() } : {}) }, $push: { timeline: timelineEntry(next, `WEBHOOK:${provider}`) } }, { session });
       await LogisticsWebhookEvent.updateOne({ _id: event._id }, { $set: { status: 'PROCESSED', processedAt: new Date(), shipmentId: shipment.publicId || shipment._id.toString() } }, { session });
       return moved;
     });

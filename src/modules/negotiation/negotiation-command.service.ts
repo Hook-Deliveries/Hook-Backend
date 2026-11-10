@@ -3,13 +3,12 @@ import { Negotiation } from '@models/negotiations/negotiation.model';
 import { NegotiationCommand } from '@models/negotiations/command.model';
 import { HttpError } from '@utils/http';
 import { NegotiationService, type NegotiationIdentity } from '@modules/negotiation/negotiation.service';
-import { NegotiationShoppingService } from '@modules/negotiation/negotiation-shopping.service';
 import { publishRealtime } from '@modules/platform';
 import { HookPartner } from '@models/platform/operations-accounts.model';
 import { withNegotiationExecution } from '@lib/negotiation-execution';
 
 export class NegotiationCommandService {
-  async run(identity: NegotiationIdentity, id: string, key: string, payload: { message: string } | { offeredPriceMinor?: number; message?: string }) {
+  async run(identity: NegotiationIdentity, id: string, key: string, payload: { offeredPriceMinor?: number; message?: string }) {
     if (!key || key.length < 8 || key.length > 200) throw new HttpError(400, 'Idempotency-Key required');
     const filter = { publicId: id, customerId: identity.customerId, ...(identity.partnerId ? { initiatingPartnerId: identity.partnerId } : {}) };
     const session = await Negotiation.findOne(filter).select('_id publicId customerId initiatingPartnerId').lean();
@@ -38,9 +37,7 @@ export class NegotiationCommandService {
       targets = { accountId: partner?.accountId || identity.customerId };
       publishRealtime({ type: 'negotiation.processing', entityId: id, data: { processing: true, requestId: key } }, targets);
       const service = new NegotiationService();
-      const result = await withNegotiationExecution(owner, async () => 'offeredPriceMinor' in payload
-        ? await service.offer(identity, id, payload.offeredPriceMinor, key, payload.message)
-        : await new NegotiationShoppingService().message(identity, id, payload.message || '', key));
+      const result = await withNegotiationExecution(owner, () => service.offer(identity, id, payload.offeredPriceMinor, key, payload.message));
       const snapshot = { ...await service.detail(identity, id), processing: false };
       const response = { ...result, ...snapshot, message: result?.message };
       await NegotiationCommand.updateOne({ ...commandFilter, owner }, { $set: { status: 'completed', response } });

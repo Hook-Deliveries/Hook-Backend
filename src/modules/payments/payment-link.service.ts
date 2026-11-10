@@ -20,7 +20,7 @@ function hash(value: string) {
 }
 
 export function paymentOrigin() {
-  const configured = String(process.env.PAYMENT_WEB_ORIGIN || "https://hook-africa.vercel.app").replace(/\/$/, "");
+  const configured = String(process.env.PAYMENT_WEB_ORIGIN || process.env.PUBLIC_WEB_URL || "https://app.hook.africa").replace(/\/$/, "");
   if (process.env.NODE_ENV === "production" && !configured.startsWith("https://")) {
     throw new HttpError(503, "Hosted payments are not configured", undefined, "PAYMENT_CONFIGURATION_ERROR");
   }

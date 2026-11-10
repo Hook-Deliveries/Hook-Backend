@@ -17,13 +17,15 @@ import { withNegotiationExecution, negotiationWriteFence } from '../src/lib/nego
 const keys = ['AZURE_OPENAI_API_KEY', 'AZURE_OPENAI_ENDPOINT', 'AZURE_OPENAI_DEPLOYMENT_NAME', 'AZURE_OPENAI_API_VERSION'];
 const original = new Map(keys.map((key) => [key, process.env[key]]));
 afterEach(() => { mock.restoreAll(); for (const [key, value] of original) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-const session = { _id: 'session', publicId: 'neg_1', customerId: 'customer', productId: 'product', quantity: 2, version: 3, status: 'active', offerCount: 1, maximumOffers: 3, lastCounterPriceMinor: 4500000, transcript: [{ role: 'customer', message: '40k', offeredPriceMinor: 4000000 }], rulesSnapshot: { azureWordingEnabled: true } };
+const session = { _id: 'session', publicId: 'neg_1', customerId: 'customer', productId: '64b0000000000000000000a1', quantity: 2, version: 3, status: 'active', offerCount: 1, maximumOffers: 3, lastCounterPriceMinor: 4500000, transcript: [{ role: 'customer', message: '40k', offeredPriceMinor: 4000000 }], rulesSnapshot: { azureWordingEnabled: true } };
 function fixture() {
   for (const key of keys) process.env[key] = 'unit-test';
   process.env.AZURE_OPENAI_ENDPOINT = 'https://hook-unit.openai.azure.com';
   mock.method(Negotiation, 'findOne', () => ({ lean: async () => session }));
   mock.method(CommerceSettings, 'findOne', () => ({ select: () => ({ lean: async () => ({}) }) }));
-  mock.method(Product, 'findById', () => ({ select: () => ({ lean: async () => ({ publicId: 'prd_1', title: 'Hook shoe', sellingPriceMinor: 5000000, negotiationRules: { minimumNegotiablePriceMinor: 100 } }) }) }));
+  // Product.findById serves both the card lookups (select().lean()) and the live-rules check (lean()).
+  const liveProduct = { publicId: 'prd_1', title: 'Hook shoe', status: 'published', availabilityStatus: 'available', sellingPriceMinor: 5000000, negotiationRules: { enabled: true, minimumNegotiablePriceMinor: 4000000, maximumDiscountMinor: 1000000 } };
+  mock.method(Product, 'findById', () => ({ select: () => ({ lean: async () => liveProduct }), lean: async () => liveProduct }));
   mock.method(Product, 'find', () => ({ select: () => ({ lean: async () => [] }) }));
   for (const model of [ProductVariant, LegalContent]) mock.method(model, 'find', () => ({ select: () => ({ limit: () => ({ lean: async () => [] }) }) }));
   mock.method(Cart, 'findOne', () => ({ select: () => ({ lean: async () => null }) }));

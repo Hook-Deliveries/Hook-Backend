@@ -131,6 +131,14 @@ export const authLimiter = rateLimit('auth', {
   message: 'Too many authentication attempts. Please try again later.',
 });
 
+// Each negotiation message costs model calls, so a signed-in customer is limited per account rather than per IP.
+export const negotiationLimiter = rateLimit('negotiation', {
+  windowMs: Number(process.env.NEGOTIATION_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.NEGOTIATION_RATE_LIMIT_MAX || 30),
+  key: (req) => (req.user?.sub ? `user:${req.user.sub}` : clientKey(req)),
+  message: 'You are sending messages too quickly. Please slow down.',
+});
+
 export const uploadLimiter = rateLimit('upload', {
   windowMs: Number(process.env.UPLOAD_RATE_LIMIT_WINDOW_MS || 10 * 60_000),
   max: Number(process.env.UPLOAD_RATE_LIMIT_MAX || 40),

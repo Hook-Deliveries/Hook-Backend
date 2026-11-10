@@ -50,6 +50,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationDefinition> = {
   // Negotiation
   negotiation_idle: E('reminders', 'negotiation', 6),
   negotiation_agreed: T('orders', 'negotiation'),
+  negotiation_quote_voided: T('orders', 'negotiation'),
   negotiation_expiring: T('orders', 'negotiation'),
   negotiation_expired: E('reminders', 'negotiation', 6),
 

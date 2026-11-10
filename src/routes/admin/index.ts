@@ -837,6 +837,8 @@ export function createAdminRouter() {
       maximumOffers: z.number().int().min(1).max(10),
       quoteMinutes: z.number().int().min(1).max(1440),
       azureWordingEnabled: z.boolean(),
+      cooldownMinutes: z.number().int().min(0).max(1440).optional(),
+      maxSessionsPerDay: z.number().int().min(1).max(20).optional(),
       reason: z.string().trim().min(3).max(500),
     }).strict()),
     asyncHandler(negotiations.updateSettings),

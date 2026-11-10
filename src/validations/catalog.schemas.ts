@@ -107,6 +107,11 @@ export const negotiationCreateSchema = z.object({
   message: z.string().trim().max(500).optional(),
 }).strict();
 
+/** A total for the whole quantity, in kobo. */
+export const negotiationTotalOfferSchema = z.object({
+  totalPriceMinor: moneyMinor,
+}).strict();
+
 export const negotiationOfferSchema = z.object({
   offeredPriceMinor: moneyMinor.optional(),
   message: z.string().trim().min(1).max(500),

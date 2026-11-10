@@ -29,7 +29,7 @@ import {
   commerceCartItemSchema,
 } from "@validations/commerce.schemas";
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
-import { availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
+import { availabilityBulkConfirmSchema, availabilityConfirmSchema, availabilityReportSchema, marketVendorSchema, marketVendorUpdateSchema, vendorCollectionSchema } from '@validations/vendor.schemas';
 import { itemIssueSchema, itemVerifySchema } from '@validations/fulfilment.schemas';
 import { Product } from '@models/products/product.model';
 import { CatalogAvailabilityService } from '@modules/catalog/catalog-availability.service';
@@ -196,7 +196,10 @@ export function createMarketAssociateRouter() {
     const activeSourceIds = new Set(activeSources.map((source) => source._id.toString()));
     sendSuccess(res, products.filter((product) => product.sourceMarketAssociateId === profile._id.toString() || !product.sourceMarketAssociateId || !activeSourceIds.has(product.sourceMarketAssociateId)));
   }));
-  router.post('/products/:id/availability/confirm', validateBody(availabilityConfirmSchema), asyncHandler(async (req, res) => {
+  router.post('/availability-checks/confirm', validateBody(availabilityBulkConfirmSchema), asyncHandler(async (req, res) => {
+    sendSuccess(res, await new CatalogAvailabilityService().confirmMany(req.user!.sub, req.body));
+  }));
+  router.post('/products/:id/availability/confirm',validateBody(availabilityConfirmSchema), asyncHandler(async (req, res) => {
     sendSuccess(res, await new CatalogAvailabilityService().confirm(req.user!.sub, routeParam(req.params.id), req.body));
   }));
   router.post('/products/:id/availability/report', validateBody(availabilityReportSchema), asyncHandler(async (req, res) => {

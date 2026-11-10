@@ -47,6 +47,8 @@ import { LogisticsProviderService } from "@modules/fulfilment";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { emitOutbox } from "@modules/platform";
 import { wakeOutbox } from "../../jobs/wake";
+import { deriveLiveRules, resolveQuote } from "@modules/negotiation/negotiation-live-rules.service";
+import { voidQuote } from "@modules/negotiation/negotiation-reconcile.service";
 import { timelineEntry } from "@lib/order-timeline";
 import { defaultProviderName } from "@modules/payments";
 
@@ -778,7 +780,8 @@ export class CheckoutService {
           }] as any,
           { session },
         );
-        for (const line of currentLines)
+        // Several lines (different options, say) can share one locked price: it is spent once per order.
+        for (const line of [...new Map(currentLines.filter((entry) => entry.quoteId).map((entry) => [String(entry.quoteId), entry])).values()])
           if (line.quoteId) {
             const quoteUpdate = await NegotiatedQuote.updateOne(
               {
@@ -917,7 +920,8 @@ export class CheckoutService {
       const product = map.get(item.productId);
       if (
         !product ||
-        product.catalogVersion !== item.productVersion ||
+        // A quoted line is judged on its price below, not on every unrelated catalogue edit.
+        (!item.quoteId && product.catalogVersion !== item.productVersion) ||
         !product.marketId ||
         !product.sourceStateId
       )
@@ -934,22 +938,36 @@ export class CheckoutService {
           _id: item.quoteId,
           customerId,
           productId,
-          ...(item.variantId ? { variantId: item.variantId } : {}),
-          // The agreed price was for this exact quantity.
-          quantity: item.quantity,
+          // The locked price holds for this product at any quantity and in any option until it expires.
           status: NegotiatedQuoteStatus.ACTIVE,
           expiresAt: { $gt: new Date() },
         }).lean({ virtuals: true });
         if (!quote)
           throw new HttpError(
             409,
-            "A negotiated quote expired or no longer matches the quantity",
+            "A negotiated price has expired",
             undefined,
             "NEGOTIATION_QUOTE_EXPIRED",
           );
       }
+      // The product may have changed since the price was agreed: pay the lower of the agreed and current
+      // price, and never honour a quote the product has moved away from.
+      let quotedUnitPriceMinor: number | undefined;
+      if (quote) {
+        const resolution = resolveQuote(Number(quote.agreedPriceMinor), deriveLiveRules(product));
+        if (!resolution.valid) {
+          await voidQuote(quote, resolution.reason);
+          throw new HttpError(
+            409,
+            "Your negotiated price is no longer valid for this product",
+            { reason: resolution.reason },
+            "NEGOTIATED_PRICE_VOIDED",
+          );
+        }
+        quotedUnitPriceMinor = resolution.unitPriceMinor;
+      }
       const unitPriceMinor = Number(
-        quote?.agreedPriceMinor ??
+        quotedUnitPriceMinor ??
           Number(product.sellingPriceMinor) -
             Number(product.discountMinor || 0),
       );

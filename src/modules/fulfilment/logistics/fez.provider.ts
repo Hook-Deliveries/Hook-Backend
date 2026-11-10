@@ -13,17 +13,23 @@ type FezAddress = {
 /** Reads Hook's mixed addressSnapshot/legacy deliveryAddress shapes into the one Fez needs. */
 function readAddress(input: Record<string, unknown>): FezAddress {
   const snapshot = (input.deliveryAddressSnapshot || {}) as Record<string, any>;
+  const city = snapshot.cityName || snapshot.city;
   return {
     recipientName: snapshot.recipientName || snapshot.name,
     phone: snapshot.phone,
-    line1: snapshot.line1 || snapshot.street || snapshot.formattedAddress,
-    city: snapshot.cityName || snapshot.city,
+    line1: [snapshot.line1 || snapshot.street || snapshot.formattedAddress, snapshot.line2, city].filter(Boolean).join(', '),
+    city,
     state: snapshot.stateName || snapshot.state,
   };
 }
 
 /** Module-level so the session survives across requests/instances within this process. */
 let cachedSession: { authToken: string; expiresAt: number } | undefined;
+let fezStates: string[] | undefined;
+
+function weightKg(input: Record<string, unknown>) {
+  return Math.max(1, Math.ceil(Number(input.weightGrams || 1000) / 1000));
+}
 
 /**
  * Fez Delivery adapter. Two separate credentials, not one: `secret-key` is
@@ -71,7 +77,8 @@ export class FezLogisticsProvider implements LogisticsProvider {
       throw new HttpError(502, String(body.description || 'Fez login failed'), { httpStatus: response.status }, 'LOGISTICS_PROVIDER_ERROR');
     }
     // Refresh a minute early so a call in flight never races the real expiry.
-    const expireAt = Number(body.authDetails?.expireToken);
+    // Fez returns Lagos wall-clock time ("2026-11-06 10:24:53") with no offset.
+    const expireAt = new Date(`${String(body.authDetails?.expireToken).replace(' ', 'T')}+01:00`).getTime();
     const expiresAt = Number.isFinite(expireAt) && expireAt > Date.now() ? expireAt - 60_000 : Date.now() + 10 * 60_000;
     cachedSession = { authToken, expiresAt };
     return authToken;
@@ -103,11 +110,28 @@ export class FezLogisticsProvider implements LogisticsProvider {
     return body;
   }
 
+  /** Fez rejects anything but its own 37 names, so "Abuja" or "Lagos State" must be mapped first. */
+  private async resolveState(value: string) {
+    const name = value.trim().replace(/\s+state$/i, '').replace(/-/g, ' ');
+    if (/abuja|fct|federal capital/i.test(name)) return 'FCT';
+    if (!fezStates?.length) {
+      const body = await this.send('/states', { method: 'GET' });
+      fezStates = ((body.states || []) as Array<{ state: string }>).map((entry) => String(entry.state));
+    }
+    const match = fezStates.find((state) => state.toLowerCase() === name.toLowerCase());
+    if (!match) throw new HttpError(400, `"${value}" is not a Fez delivery state. Correct the address before booking.`, undefined, 'VALIDATION_ERROR');
+    return match;
+  }
+
   async quote(input: Record<string, unknown>) {
     const address = readAddress(input);
-    const state = String(input.stateName || address.state || '');
-    if (!state) throw new HttpError(400, 'A destination state is required to get a Fez quote', undefined, 'VALIDATION_ERROR');
-    const body = await this.send('/order/cost', { method: 'POST', body: JSON.stringify({ state }) });
+    const destination = String(input.stateName || address.state || '');
+    if (!destination) throw new HttpError(400, 'A destination state is required to get a Fez quote', undefined, 'VALIDATION_ERROR');
+    const state = await this.resolveState(destination);
+    const hub = (input.hub || {}) as { stateName?: string };
+    const pickUpState = hub.stateName ? await this.resolveState(hub.stateName) : undefined;
+    // Without pickUpState and weight Fez prices the default 0-5kg band, over 3x the real cost.
+    const body = await this.send('/order/cost', { method: 'POST', body: JSON.stringify({ state, pickUpState, weight: weightKg(input) }) });
     // Fez quotes in naira; Hook's provider cost/quote fields are in kobo.
     return { provider: this.name, quoteMinor: Math.round(Number(body.totalCost || 0) * 100), state: body.cost?.state, providerRaw: body };
   }
@@ -119,19 +143,26 @@ export class FezLogisticsProvider implements LogisticsProvider {
     }
     const hub = (input.hub || {}) as { name?: string; address?: string; phone?: string; stateName?: string };
     const uniqueID = String(input.bookingIdempotencyKey || input.orderId);
+    const recipientState = await this.resolveState(address.state);
+    const pickUpState = hub.stateName ? await this.resolveState(hub.stateName) : undefined;
     const body = await this.send('/order', {
       method: 'POST',
       body: JSON.stringify([{
         recipientName: address.recipientName,
         recipientPhone: address.phone,
         recipientAddress: address.line1,
-        recipientState: address.state,
+        recipientState,
         uniqueID,
         BatchID: String(input.orderId),
         valueOfItem: String(Math.round(Number(input.totalMinor || 0) / 100)),
-        weight: Math.max(1, Math.ceil(Number(input.weightGrams || 1000) / 1000)),
-        ...(hub.address ? { thirdparty: true, senderName: hub.name || 'Hook', senderAddress: hub.address, senderPhone: hub.phone, pickUpState: hub.stateName, pickUpAddress: hub.address } : {}),
+        weight: weightKg(input),
+        ...(hub.address ? { thirdparty: true, senderName: hub.name || 'Hook', senderAddress: hub.address, senderPhone: hub.phone, pickUpState, pickUpAddress: hub.address } : {}),
       }]),
+    }).catch((error) => {
+      // A retry after a crash: Fez already holds this booking, so adopt it instead of failing.
+      const existing = ((error as HttpError).details as any)?.providerBody?.duplicateUniqueIds?.[uniqueID];
+      if (!existing) throw error;
+      return { orderNos: { [uniqueID]: existing } } as Record<string, any>;
     });
     const orderNo = String(body.orderNos?.[uniqueID] || '');
     if (!orderNo) throw new HttpError(502, 'Fez did not return an order number for this booking', undefined, 'LOGISTICS_PROVIDER_ERROR');

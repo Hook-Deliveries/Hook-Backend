@@ -71,8 +71,10 @@ export class FulfilmentController {
   // body, no event id) doesn't fit the generic x-provider-* header scheme above, so it
   // gets its own route rather than forcing a mismatched contract through the shared one.
   fezWebhook = async (req: Request, res: Response) => {
-    const body = req.body as { orderNumber?: string; status?: string };
-    const eventId = `${body.orderNumber || ''}:${body.status || ''}`;
+    const { orderNumber, status, orderStatus } = req.body as { orderNumber: string; status?: string; orderStatus?: string };
+    // Fez's docs name the field `status` on one page and `orderStatus` on another.
+    const body = { orderNumber, status: status || orderStatus };
+    const eventId = `${body.orderNumber}:${body.status}`;
     const timestamp = String(req.header('x-timestamp') || '');
     sendSuccess(res, await fulfilmentService.logisticsWebhook('fez', eventId, body, String(req.header('x-signature') || ''), timestamp));
   };

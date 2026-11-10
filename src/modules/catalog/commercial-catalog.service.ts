@@ -1,4 +1,5 @@
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
+import { reconcileProductInBackground } from "@modules/negotiation/negotiation-reconcile.service";
 import { categoryService } from "@modules/catalog/category.service";
 import { Category } from "@models/categories/category.model";
 import {
@@ -649,6 +650,8 @@ export class CommercialCatalogService {
       { type: "admin.dashboard.updated", ...event },
       { admin: true },
     );
+    // Any open negotiation or locked price on this product is re-checked against the change.
+    reconcileProductInBackground(product._id?.toString());
   }
 }
 
