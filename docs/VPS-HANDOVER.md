@@ -368,6 +368,19 @@ sudo ip6tables -S DOCKER-USER
 
 The established-connection rules must appear before the `HOOK-CF` rules. The signed Cloudinary API ping, public image fetch, and a temporary signed image upload returned HTTP 200 in both main and development after the correction; the temporary test images were deleted. Main and development health endpoints also returned HTTP 200.
 
+### Paystack and Monnify callback/webhook URLs
+
+Set the callback URL variables in each server `.env` file. In the provider dashboards, configure the separate webhook URL. A callback sends the shopper back to Hook after checkout; a webhook sends payment events from the provider to the backend. Both server environments currently use Paystack test credentials and Monnify sandbox mode; replace the main server credentials with live provider credentials before accepting real payments.
+
+| Environment | Provider | Checkout callback | Provider webhook |
+|---|---|---|---|
+| Main API | Paystack | `https://api.hookapp.tech/api/v1/payments/paystack/callback` | `https://api.hookapp.tech/api/v1/webhooks/paystack` |
+| Main API | Monnify | `https://api.hookapp.tech/api/v1/payments/monnify/callback` | `https://api.hookapp.tech/api/v1/webhooks/monnify` |
+| Development API | Paystack | `https://dev-api.hookapp.tech/api/v1/payments/paystack/callback` | `https://dev-api.hookapp.tech/api/v1/webhooks/paystack` |
+| Development API | Monnify | `https://dev-api.hookapp.tech/api/v1/payments/monnify/callback` | `https://dev-api.hookapp.tech/api/v1/webhooks/monnify` |
+
+Set `PAYSTACK_CALLBACK_URL` and `MONNIFY_CALLBACK_URL` to the matching environment's callback. `APP_URL` should use that environment's API host as a fallback. Do not point a live provider account at the development URLs.
+
 Changing `REDIS_PASSWORD` or `RABBITMQ_PASSWORD` needs a coordinated service credential rotation; schedule it with the owner because these services keep persistent data and all clients must use the same new credentials. Do not remove Docker volumes as part of routine deployment or troubleshooting.
 
 ## Handover sign-off
