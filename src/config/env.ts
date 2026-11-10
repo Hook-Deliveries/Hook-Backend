@@ -1,3 +1,5 @@
+import { warnIfAzureIncomplete } from './azure-openai';
+
 const unsafeJwtSecrets = new Set([
   'change-me-in-production',
   'hook-dev-jwt-secret-change-in-production-12345',
@@ -75,6 +77,8 @@ export function assertSafeEnvironment() {
     }
     requireEnv('GOOGLE_WEB_CLIENT_ID');
   }
+  // Negotiation is on by default; say so early when its AI provider is not fully set up.
+  warnIfAzureIncomplete();
 }
 
 export function apiDocsEnabled() {

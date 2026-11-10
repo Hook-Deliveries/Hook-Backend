@@ -5,18 +5,29 @@ shopping intents are always enabled and use only configured backend Azure. No
 destructive transcript migration is required. Existing offer, accept and close
 endpoints remain supported. Missing message IDs use legacy keys in the app.
 
-New customer endpoints:
+Customer negotiation is a guided flow, not a chat:
 
-- `POST /negotiations/:id/messages` with `{message}` and an `Idempotency-Key`.
-- `POST /negotiations/:id/actions/:actionId/confirm` with `{variantId, quantity}`.
-  The action ID identifies the persisted execution; approved prices are never
-  accepted from the client. The variant must match the session and its quote.
+- `GET /negotiations/:id/offer-flow` returns everything the screen shows: list price, the three suggested
+  totals, Hook's counter, the locked price, rounds left and the history of offers. Amounts are totals for the whole
+  quantity, with the per-item price alongside.
+- `POST /negotiations/:id/offer-total` with `{totalPriceMinor}` and an `Idempotency-Key`. The rules are checked
+  before a round is spent (below the list price, a serious amount, below Hook's last counter, above the customer's
+  last offer). An accepted offer is locked immediately.
+- Existing `POST /negotiations`, `/accept` and `/close` are unchanged. The locked price goes into the cart with
+  `POST /cart/items` and `quoteId`; the cart service rechecks price, options, ownership and expiry.
 
-The action is leased before execution, stores its receipt, and replays completed
-results. Quoted cart writes set the quote's exact quantity rather than incrementing
-it. Pricing, stock, ownership, options and expiry are checked by the cart service.
-Payment continues through the existing checkout. Azure output cannot approve a
-price or execute a cart write.
+Pricing is decided only by the Pricing Engine. The AI picks which suggested prices to show and writes short notes
+(validated, with an evenly spread fallback), and words each answer. If the AI provider is down offers still work.
+
+A locked price belongs to the product for its whole lifetime (`negotiationQuoteMinutes`): it holds at any quantity
+(up to the cart limit of 99) and in any option, and is applied by the cart on every way of adding that product. Lines
+already in the cart move to it when it is locked, a quantity change keeps it, and checkout spends it once per order.
+`GET /negotiation-quotes/active` lists the customer's current locked prices (product, per-item price, list price,
+percent off, expiry) so every screen that shows a price can lead with it. If the product goes off sale or the minimum
+price rises above the locked price, it is cancelled.
+
+The previous customer chat (`/messages`, `/actions/:actionId/confirm` and the `negotiation.send` socket event) was
+removed. Partners still send free-text through `POST /partner/customers/:customerId/negotiations/:id/offers`.
 
 Checks run locally: `npm run test:negotiation`, backend build/lint, app
 TypeScript/lint. The unit tests mock persistence; they do not substitute for
@@ -43,6 +54,23 @@ provider. Existing approved quotes remain usable through ordinary checkout.
 
 Configure `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`,
 `AZURE_OPENAI_DEPLOYMENT_NAME`, and `AZURE_OPENAI_API_VERSION` only on the backend.
+`AZURE_OPENAI_MODEL_NAME` is optional and only selects request parameters. For Docker the values
+live in `deploy/.env`; `GET /admin/negotiation-settings` reports `providerConfigured` and the names
+(never the values) of anything missing.
+
+## Price changes, limits and wording fallback
+
+- Every offer, accept and cart/checkout step is judged on the product's rules as they are now
+  (`negotiation-live-rules.service.ts`). A customer pays the lower of the agreed and current price.
+  A locked price is cancelled when the product goes off sale, negotiation is switched off, or the
+  minimum price rises above it (`NEGOTIATED_PRICE_VOIDED`, `NEGOTIATION_PRODUCT_UNAVAILABLE`).
+  Admin edits trigger an immediate reconcile; the 60-second `catalog-deadlines` job is the safety net.
+- Re-rolling is limited: one live session per item, a cooldown (`negotiationCooldownMinutes`, default 30)
+  and a daily cap (`negotiationMaxSessionsPerDay`, default 3) on sessions that actually made an offer.
+  Sessions ended by a product change never count. Run `npm run db:dedupe-negotiations -- --execute`
+  once to close pre-existing duplicate live sessions and build the unique index.
+- If the model's wording breaks a rule twice, the customer gets safe fixed wording with the same
+  decision and price (`providerFallback: true`). A real Azure outage still fails closed with 503.
 Disabling Azure wording in Commerce Settings pauses replies. No negotiation
 feature switches are required in the environment.
 

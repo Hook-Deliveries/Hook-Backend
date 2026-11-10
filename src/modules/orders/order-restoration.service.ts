@@ -4,6 +4,7 @@ import { CouponService } from '@modules/orders/coupon.service';
 import { CreditService } from '@modules/orders/credit.service';
 import { NegotiatedQuote } from '@models/catalog/catalog.model';
 import { NegotiatedQuoteStatus } from '@lib/constants';
+import { loadLiveRules, resolveQuote } from '@modules/negotiation/negotiation-live-rules.service';
 
 const coupons = new CouponService();
 const credits = new CreditService();
@@ -56,11 +57,21 @@ export async function restoreOrderIncentives(orderIdentifier: string, session?: 
     }
 
     // A quote spent on this order is handed back while it is still valid, so the customer can use their agreed price again.
-    await NegotiatedQuote.updateMany(
-      { usedByOrderId: orderId, status: NegotiatedQuoteStatus.USED, expiresAt: { $gt: new Date() } },
-      { $set: { status: NegotiatedQuoteStatus.ACTIVE }, $unset: { usedByOrderId: 1, usedAt: 1 } },
-      { session },
-    );
+    // ...unless the product has changed in the meantime: then the price can no longer be honoured, so it is cancelled.
+    const spent = await NegotiatedQuote.find({ usedByOrderId: orderId, status: NegotiatedQuoteStatus.USED, expiresAt: { $gt: new Date() } })
+      .select('_id agreedPriceMinor productId variantId')
+      .session(session ?? null)
+      .lean();
+    for (const quote of spent) {
+      const resolution = resolveQuote(Number(quote.agreedPriceMinor), await loadLiveRules(quote.productId, quote.variantId));
+      await NegotiatedQuote.updateOne(
+        { _id: quote._id, status: NegotiatedQuoteStatus.USED },
+        resolution.valid
+          ? { $set: { status: NegotiatedQuoteStatus.ACTIVE }, $unset: { usedByOrderId: 1, usedAt: 1 } }
+          : { $set: { status: NegotiatedQuoteStatus.CANCELLED, voidedAt: new Date(), voidReason: resolution.reason }, $unset: { usedByOrderId: 1, usedAt: 1 } },
+        { session },
+      );
+    }
 
     // Redemptions are stored against the order's _id at checkout time.
     const couponsReleased = await coupons.release(orderId, session);

@@ -1,6 +1,7 @@
 import { deliverNegotiationStartNotifications } from '@modules/negotiation/negotiation-notifications.service';
 import { expireUnpaidOrders } from '@modules/orders/order.service';
 import { expireNegotiationsAndQuotes } from '@modules/negotiation/negotiation.service';
+import { sweepNegotiationDrift } from '@modules/negotiation/negotiation-reconcile.service';
 import { escalateOverdueAvailabilityChecks } from '@modules/catalog/catalog-availability.service';
 import { sendDailyAvailabilityDigests } from '@modules/notifications/availability-digest.service';
 import { fulfilmentService } from '@modules/fulfilment/fulfilment.service';
@@ -49,7 +50,8 @@ export const JOBS: JobDefinition[] = [
   {
     name: 'catalog-deadlines',
     everyMs: 60_000,
-    run: () => Promise.all([expireNegotiationsAndQuotes(), escalateOverdueAvailabilityChecks()]),
+    // The drift sweep is a safety net for changes made by scripts or paths that do not trigger a live reconcile.
+    run: () => Promise.all([expireNegotiationsAndQuotes(), escalateOverdueAvailabilityChecks(), sweepNegotiationDrift()]),
   },
   { name: 'expire-unpaid-orders', everyMs: 30 * 60_000, run: () => expireUnpaidOrders() },
   { name: 'reconcile-payments', everyMs: 60_000, run: () => new PaymentService().reconcileStalePayments() },

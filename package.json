@@ -31,6 +31,7 @@
     "start:prod": "node dist/server.js",
     "lint": "eslint \"src/**/*.ts\"",
     "seed": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/seeds/index.ts",
+    "db:dedupe-negotiations": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/dedupe-active-negotiations.ts",
     "db:clear-orders": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-orders.ts",
     "db:clear-market-associate-uploads": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/clear-market-associate-uploads.ts",
     "db:seed-market-associate-products": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-market-associate-products.ts",

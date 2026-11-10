@@ -48,6 +48,15 @@ export function onSaleFilter(now = new Date()) {
   };
 }
 
+/**
+ * `match AND on sale`. Both sides of a query often carry their own `$or` (an id lookup by `_id` or `publicId`, and
+ * the availability window), and spreading the two objects together silently drops the first `$or`, so the query
+ * can return a different product. Always combine them with this.
+ */
+export function withOnSale(match: Record<string, unknown>, now = new Date()) {
+  return { $and: [match, onSaleFilter(now)] };
+}
+
 /** The window filter alone, for listings that already constrain status themselves. */
 export function stillValidFilter(now = new Date()) {
   return { $or: [{ availabilityValidUntil: { $exists: false } }, { availabilityValidUntil: null }, { availabilityValidUntil: { $gt: now } }] };

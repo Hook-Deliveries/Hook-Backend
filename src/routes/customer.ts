@@ -5,6 +5,7 @@ import { NegotiationController } from "@controllers/negotiation.controller";
 import { requireCustomerIdentity } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
 import { withIdempotency } from "@middleware/idempotency";
+import { negotiationLimiter } from "@middleware/security";
 import {
   cartQuantitySchema,
   customerRefundRequestSchema,
@@ -12,6 +13,7 @@ import {
 import {
   negotiationCreateSchema,
   negotiationOfferSchema,
+  negotiationTotalOfferSchema,
 } from "@validations/catalog.schemas";
 import {
   addressCreateSchema,
@@ -229,19 +231,27 @@ export function createCustomerRouter() {
   );
 
   router.get("/negotiations", asyncHandler(negotiations.list));
+  router.get("/negotiation-quotes/active", asyncHandler(negotiations.lockedPrices));
   router.get("/negotiations-active", asyncHandler(negotiations.active));
   router.post(
     "/negotiations",
+    negotiationLimiter,
     validateBody(negotiationCreateSchema),
     asyncHandler(negotiations.create),
   );
   router.get("/negotiations/:id", asyncHandler(negotiations.detail));
-  router.post('/negotiations/:id/messages', validateBody(z.object({ message: z.string().trim().min(1).max(500) }).strict()), asyncHandler(negotiations.message));
-  router.post('/negotiations/:id/actions/:actionId/confirm', validateBody(z.object({ quantity: z.number().int().min(1).max(20), variantId: z.string().min(1).max(100) }).strict()), asyncHandler(negotiations.confirmAction));
   router.post(
     "/negotiations/:id/offers",
+    negotiationLimiter,
     validateBody(negotiationOfferSchema),
     asyncHandler(negotiations.offer),
+  );
+  router.get("/negotiations/:id/offer-flow", asyncHandler(negotiations.flow));
+  router.post(
+    "/negotiations/:id/offer-total",
+    negotiationLimiter,
+    validateBody(negotiationTotalOfferSchema),
+    asyncHandler(negotiations.offerTotal),
   );
   router.post("/negotiations/:id/accept", asyncHandler(negotiations.accept));
   router.post("/negotiations/:id/close", asyncHandler(negotiations.close));

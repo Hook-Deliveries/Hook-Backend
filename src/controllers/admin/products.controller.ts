@@ -1,4 +1,5 @@
 import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
+import { reconcileProductInBackground } from '@modules/negotiation/negotiation-reconcile.service';
 import { onSaleFilter } from '@lib/product-availability';
 import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
@@ -70,6 +71,8 @@ function publishProductUpdate(product: any) {
   publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+  // Any open negotiation or locked price on this product is re-checked against the change.
+  reconcileProductInBackground(product._id?.toString());
 }
 
 function assertAdminPublishReady(product: Record<string, any>) {
@@ -344,6 +347,27 @@ export class AdminProductsController {
     }
     if (updates.costPrice !== undefined) updates.basePriceMinor = Math.round(Number(updates.costPrice) * 100);
     if (updates.sellingPrice !== undefined) updates.sellingPriceMinor = Math.round(Number(updates.sellingPrice) * 100);
+    // The discount is stored in kobo beside the naira fields; keep it in step so the cart, checkout and negotiation
+    // all agree on what the customer pays (same derivation as product creation).
+    if (updates.sellingPrice !== undefined || updates.discountedPrice !== undefined) {
+      const selling = Number(updates.sellingPrice ?? product.sellingPrice);
+      const discounted = updates.discountedPrice !== undefined ? updates.discountedPrice : product.discountedPrice;
+      updates.discountMinor = discounted ? Math.max(0, Math.round((selling - Number(discounted)) * 100)) : 0;
+    }
+    // Negotiation floor follows the pricing: when the selling price, cost or floor changes on a negotiable product,
+    // the rules are re-derived (and validated) instead of silently drifting out of range of the new price.
+    const pricingChanged = ['costPrice', 'sellingPrice', 'minAcceptablePrice'].some((key) => updates[key] !== undefined);
+    if (product.negotiationRules?.enabled && pricingChanged) {
+      const derived = defaultNegotiationRules({
+        sellingPriceMinor: updates.sellingPriceMinor ?? product.sellingPriceMinor,
+        basePriceMinor: updates.basePriceMinor ?? product.basePriceMinor,
+        minAcceptablePriceMinor: Math.round(Number(updates.minAcceptablePrice ?? product.minAcceptablePrice) * 100),
+      });
+      if (!derived) {
+        throw new HttpError(400, 'The negotiation floor must be between the cost price and the selling price', undefined, 'PRODUCT_PRICING_INVALID');
+      }
+      updates.negotiationRules = { ...JSON.parse(JSON.stringify(product.negotiationRules)), ...derived };
+    }
     // Only fill in a default when negotiation isn't already configured — never override rules an admin set explicitly.
     if (!product.negotiationRules?.enabled) {
       const negotiationRules = defaultNegotiationRules({

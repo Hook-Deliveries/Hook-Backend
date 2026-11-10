@@ -51,6 +51,14 @@ export const availabilityConfirmSchema = z.object({
   version: z.coerce.number().int().positive(),
 }).strict();
 
+export const availabilityBulkConfirmSchema = z.object({
+  items: z.array(z.object({
+    publicId: z.string().trim().min(1),
+    version: z.coerce.number().int().positive(),
+  }).strict()).min(1).max(100),
+  status: z.enum(['available', 'limited']).default('available'),
+}).strict();
+
 export const availabilityReportSchema = z.object({
   note: z.string().trim().min(3).max(500),
   version: z.coerce.number().int().positive(),

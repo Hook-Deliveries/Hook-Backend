@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { NegotiationService } from '@modules/negotiation/negotiation.service';
 import { routeParam } from '@lib/api-utils';
-import { HttpError, sendCreated, sendSuccess } from '@utils/http';
+import { sendCreated, sendSuccess } from '@utils/http';
 import { recordAudit } from '@modules/platform/platform-audit.service';
-import { NegotiationShoppingService } from '@modules/negotiation/negotiation-shopping.service';
 import { NegotiationCommandService } from '@modules/negotiation/negotiation-command.service';
+import { lockedPricesFor } from '@modules/negotiation/negotiation-locked-prices.service';
+import { NegotiationOfferFlowService } from '@modules/negotiation/negotiation-offer-flow.service';
 
 function identity(req: Request) {
   return { customerId: req.user!.sub };
@@ -12,30 +13,28 @@ function identity(req: Request) {
 
 export class NegotiationController {
   private readonly negotiations = new NegotiationService();
-  private readonly shopping = new NegotiationShoppingService();
+  private readonly offerFlow = new NegotiationOfferFlowService();
 
-  message = async (req: Request, res: Response) => {
-    const result = await new NegotiationCommandService().run(identity(req), routeParam(req.params.id), req.header('idempotency-key') || '', { message: req.body.message });
-    const audit = result as Record<string, unknown>;
-    const entry = audit.entry as { kind?: string; actionId?: string; productIds?: string[] } | undefined;
-    await recordAudit(req, {
-      action: audit.providerFallback ? 'negotiation.azure_fallback' : entry?.kind === 'suggestions' ? 'negotiation.suggestions_created' : entry?.kind === 'action' ? 'negotiation.confirmation_requested' : 'negotiation.message_processed',
-      entityType: 'negotiation', entityPublicId: routeParam(req.params.id),
-      after: { contentKind: entry?.kind, actionId: entry?.actionId, productIds: entry?.productIds, providerFallback: audit.providerFallback },
-    });
-    sendSuccess(res, result);
+  /** Every price the customer has locked and can still use, for showing on any screen. */
+  lockedPrices = async (req: Request, res: Response) => {
+    sendSuccess(res, { prices: await lockedPricesFor(req.user!.sub) });
   };
 
-  confirmAction = async (req: Request, res: Response) => {
-    let result;
-    try {
-      result = await this.shopping.confirm(identity(req), routeParam(req.params.id), routeParam(req.params.actionId), req.body.quantity, req.body.variantId);
-    } catch (error) {
-      if (error instanceof HttpError) await recordAudit(req, { action: 'negotiation.confirmation_rejected', entityType: 'negotiation', entityPublicId: routeParam(req.params.id), after: { actionId: routeParam(req.params.actionId), code: error.code } });
-      throw error;
-    }
-    await recordAudit(req, { action: 'negotiation.cart_confirmed', entityType: 'negotiation', entityPublicId: routeParam(req.params.id) });
-    sendSuccess(res, result);
+  /** Everything the guided offer screen needs: prices, suggestions, Hook's counter, the locked price and history. */
+  flow = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.offerFlow.flow(identity(req), routeParam(req.params.id)));
+  };
+
+  /** Offer as a total for the whole quantity. */
+  offerTotal = async (req: Request, res: Response) => {
+    const outcome = await this.offerFlow.submitTotal(identity(req), routeParam(req.params.id), req.body.totalPriceMinor, req.header('idempotency-key') || '');
+    await recordAudit(req, {
+      action: outcome.result.providerFallback ? 'negotiation.azure_fallback' : 'negotiation.offer_processed',
+      entityType: 'negotiation',
+      entityPublicId: routeParam(req.params.id),
+      after: { decision: outcome.result.decision, status: outcome.flow.status, quoteId: outcome.flow.locked?.quoteId, providerFallback: outcome.result.providerFallback },
+    });
+    sendSuccess(res, outcome);
   };
 
   create = async (req: Request, res: Response) => {

@@ -45,6 +45,6 @@ export function clearEmailSettingsCache() {
 // Base URL emails link back to; Admin > Settings > Email wins over env vars.
 export async function adminAppBaseUrl(): Promise<string> {
   const doc = await EmailSettings.findOne({ key: 'email' }).select('appUrl').lean();
-  const url = doc?.appUrl?.trim() || process.env.ADMIN_APP_URL || process.env.APP_URL || 'http://localhost:3000';
+  const url = doc?.appUrl?.trim() || process.env.ADMIN_APP_URL || process.env.PUBLIC_WEB_URL || process.env.APP_URL || 'http://localhost:3000';
   return url.replace(/\/+$/, '');
 }

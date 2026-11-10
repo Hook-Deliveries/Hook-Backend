@@ -176,7 +176,7 @@ class RealtimeService {
         }
       }
       socket.emit('realtime.ready', { version: 1, occurredAt: new Date().toISOString() });
-      const inputSchema = z.object({ negotiationId: z.string().min(1).max(80), message: z.string().trim().min(1).max(1000).optional(), requestId: z.string().min(8).max(200).optional() }).strict();
+      const inputSchema = z.object({ negotiationId: z.string().min(1).max(80) }).strict();
       const acknowledge = async (raw: unknown, ack: unknown, execute: (id: string, input: z.infer<typeof inputSchema>, actor: { customerId: string; partnerId?: string }) => Promise<unknown>) => {
         if (typeof ack !== 'function') return;
         try {
@@ -206,14 +206,6 @@ class RealtimeService {
         return new NegotiationService().detail(actor, id);
       }));
       socket.on('negotiation.unsubscribe', () => { delete socket.data.negotiationId; });
-      socket.on('negotiation.send', (raw, ack) => void acknowledge(raw, ack, async (id, input, actor) => {
-        if (!input.message || !input.requestId) throw new HttpError(400, 'Message and request ID required');
-        const now = Date.now();
-        if (now - Number(socket.data.lastNegotiationSend || 0) < 500) throw new HttpError(429, 'Please wait before sending again');
-        socket.data.lastNegotiationSend = now;
-        const { NegotiationCommandService } = await import('@modules/negotiation');
-        return new NegotiationCommandService().run(actor, id, input.requestId, { message: input.message });
-      }));
     });
 
     return this.io;

@@ -13,6 +13,9 @@ export interface NegotiationMessage {
   message: string;
   offeredPriceMinor?: number;
   decision?: 'ACCEPT' | 'COUNTER' | 'DECLINE';
+  /** Unit prices Hook answered with in this round, kept so each round can be shown later. */
+  counterPriceMinor?: number;
+  acceptedPriceMinor?: number;
   createdAt: Date;
 }
 
@@ -36,6 +39,8 @@ export interface Negotiation extends BaseEntity {
   maximumOffers: number;
   transcript: NegotiationMessage[];
   rulesSnapshot?: {
+    /** 'effective' = priced on selling price minus discount (what the customer pays today). */
+    priceBasis?: 'effective';
     sellingPriceMinor: number;
     minimumNegotiablePriceMinor: number;
     maximumDiscountMinor: number;
@@ -66,6 +71,8 @@ export interface Negotiation extends BaseEntity {
   }>;
   expiresAt?: Date;
   quoteId?: string;
+  /** Why the session ended without a customer decision, e.g. PRODUCT_UNAVAILABLE. */
+  endReason?: string;
   version: number;
 
   // Legacy fields retained only for migration/read compatibility.
@@ -116,6 +123,7 @@ const schema = createSchema<Negotiation>({
   idempotencyResults: { type: [Object], default: [] },
   expiresAt: { type: Date, index: true },
   quoteId: { type: String, index: true, sparse: true },
+  endReason: { type: String },
   version: { type: Number, default: 1, min: 1 },
   userId: { type: String, index: true, sparse: true },
   guestId: { type: String, index: true, sparse: true },
@@ -136,6 +144,16 @@ const schema = createSchema<Negotiation>({
 });
 schema.index({ customerId: 1, productId: 1, variantId: 1, quantity: 1, status: 1 });
 schema.index({ guestSessionId: 1, productId: 1, status: 1 });
+// One live session per customer, item and quantity (a Partner's session for the same customer is separate).
+// Existing duplicates must be closed first: see src/database/scripts/dedupe-active-negotiations.ts.
+schema.index(
+  { customerId: 1, productId: 1, variantId: 1, quantity: 1, initiatingPartnerId: 1 },
+  {
+    unique: true,
+    name: 'unique_active_negotiation',
+    partialFilterExpression: { status: 'active', customerId: { $exists: true }, variantId: { $exists: true } },
+  },
+);
 schema.index({ sourceStateId: 1, status: 1, createdAt: -1 });
 
 export const Negotiation = createModel<Negotiation>('Negotiation', schema);

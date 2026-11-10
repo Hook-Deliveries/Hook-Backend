@@ -88,6 +88,10 @@ export interface CommerceSettings extends BaseEntity {
   negotiationMaximumOffers: number;
   negotiationQuoteMinutes: number;
   negotiationAzureWordingEnabled: boolean;
+  /** Minutes a customer waits before negotiating the same product option again. 0 disables the wait. */
+  negotiationCooldownMinutes?: number;
+  /** Most negotiations a customer can run on one product option in 24 hours. */
+  negotiationMaxSessionsPerDay?: number;
   paymentProviders: Array<{
     provider: "paystack" | "monnify";
     enabled: boolean;
@@ -251,6 +255,8 @@ const settingsSchema = createSchema<CommerceSettings>({
   negotiationMaximumOffers: { type: Number, default: 3, min: 1, max: 10 },
   negotiationQuoteMinutes: { type: Number, default: 30, min: 1, max: 1440 },
   negotiationAzureWordingEnabled: { type: Boolean, default: true },
+  negotiationCooldownMinutes: { type: Number, default: 30, min: 0, max: 1440 },
+  negotiationMaxSessionsPerDay: { type: Number, default: 3, min: 1, max: 20 },
   paymentProviders: {
     type: [Object],
     default: [
