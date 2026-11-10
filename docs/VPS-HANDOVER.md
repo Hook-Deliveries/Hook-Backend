@@ -352,7 +352,21 @@ docker compose exec -T api-1 node -e 'for (const n of ["CLOUDINARY_CLOUD_NAME","
 docker compose exec -T api-1 node -e 'const h=require("https");const u="https://api.cloudinary.com/v1_1/"+process.env.CLOUDINARY_CLOUD_NAME+"/ping";const q=h.get(u,{auth:process.env.CLOUDINARY_API_KEY+":"+process.env.CLOUDINARY_API_SECRET,timeout:7000},r=>{console.log("Cloudinary HTTP "+r.statusCode);r.resume()});q.on("timeout",()=>q.destroy(new Error("timeout")));q.on("error",e=>console.log("Cloudinary request failed: "+(e.code||e.message)))'
 ```
 
-If credentials are missing in the container, the env file was edited in the wrong folder or the app container was not recreated. A `Cloudinary HTTP 200` confirms the signed API ping succeeded; a timeout means the app container could not reach the API, so compare its DNS and outbound network path before changing Cloudinary credentials. Never paste `.env` contents or unsanitized logs into chat. On 10 November 2026, both VPS environments showed the requested values in their running API containers. A signed ping from the VPS host returned HTTP 200, but requests from both app containers to `api.cloudinary.com` timed out; a general HTTPS request from the main API container succeeded. This points to a container-to-Cloudinary API connectivity issue, but the exact network cause and real upload behavior still need confirmation.
+If credentials are missing in the container, the env file was edited in the wrong folder or the app container was not recreated. A `Cloudinary HTTP 200` confirms the signed API ping succeeded; a timeout means the app container could not reach the API, so check the Docker firewall before changing credentials. Never paste `.env` contents or unsanitized logs into chat.
+
+### Cloudinary and Docker firewall fix
+
+On 10 November 2026, the VPS environment values were present in both running stacks and a signed Cloudinary ping from the VPS host returned HTTP 200. App containers timed out to Cloudinary even though general HTTPS worked. The `HOOK-CF` drop counter increased during a failed API request. The cause was `deploy/firewall.sh`: the Cloudflare-only filter was also dropping established reply packets for outbound container requests.
+
+The script now adds IPv4 and IPv6 `ESTABLISHED,RELATED` return rules ahead of the Cloudflare source filters, and appends those filters after the return rules. New inbound connections on ports 80 and 443 remain Cloudflare-only. After deploying the updated script, reload the service from either SSH root or the `deploy` account:
+
+```sh
+sudo systemctl restart hook-firewall
+sudo iptables -S DOCKER-USER
+sudo ip6tables -S DOCKER-USER
+```
+
+The established-connection rules must appear before the `HOOK-CF` rules. The signed Cloudinary API ping, public image fetch, and a temporary signed image upload returned HTTP 200 in both main and development after the correction; the temporary test images were deleted. Main and development health endpoints also returned HTTP 200.
 
 Changing `REDIS_PASSWORD` or `RABBITMQ_PASSWORD` needs a coordinated service credential rotation; schedule it with the owner because these services keep persistent data and all clients must use the same new credentials. Do not remove Docker volumes as part of routine deployment or troubleshooting.
 
