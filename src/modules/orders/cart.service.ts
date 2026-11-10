@@ -19,8 +19,7 @@ import { Types } from "mongoose";
 import { publishRealtime } from "@modules/platform";
 import { ensureLegacyProductOptions } from '@modules/catalog';
 import { Market } from '@models/platform/network.model';
-import { deriveLiveRules, resolveQuote } from '@modules/negotiation/negotiation-live-rules.service';
-import { voidQuote } from '@modules/negotiation/negotiation-reconcile.service';
+import { deriveLiveRules, resolveQuote, voidQuote } from '@modules/negotiation/public';
 
 function identifierFilter(identifier: string) {
   return Types.ObjectId.isValid(identifier)

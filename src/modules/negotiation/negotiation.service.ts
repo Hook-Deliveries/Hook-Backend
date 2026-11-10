@@ -11,17 +11,15 @@ import { nextPublicId } from '@modules/platform';
 import { AzureNegotiationService, detectNegotiationLanguage, assertAzureConfigured, fallbackPhrase, negotiationUnavailable } from '@modules/negotiation/azure-negotiation.service';
 import { negotiationContext } from '@modules/negotiation/negotiation-context.service';
 import { negotiationWriteFence } from '@lib/negotiation-execution';
-import { PricingEngine } from '@modules/catalog';
-import type { PricingDecision } from '@modules/catalog/pricing-engine.service';
+import { ensureLegacyProductOptions, PricingEngine, type PricingDecision } from '@modules/catalog';
 import { closeSessionForProduct, reconcileQuote } from '@modules/negotiation/negotiation-reconcile.service';
 import { assertMayStartNegotiation, MAX_CHAT_TURNS_PER_SESSION } from '@modules/negotiation/negotiation-abuse.service';
 import { clampToLive, deriveLiveRules, loadLiveRules, pricingInputs, type LiveRules } from '@modules/negotiation/negotiation-live-rules.service';
 import { createCommerceNotification } from '@modules/notifications';
 import { EmailService } from '@emails/email.service';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
-import { CartService } from '@modules/orders/cart.service';
+import { CartService } from '@modules/orders/public';
 import { classifyNegotiationMessage, groundedOfferMinor, negotiationMoneyFromMessage } from '@lib/negotiation-intent';
-import { ensureLegacyProductOptions } from '@modules/catalog';
 import { publishRealtime } from '@modules/platform';
 
 /**
