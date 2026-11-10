@@ -1,5 +1,5 @@
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
-import { reconcileProductInBackground } from "@modules/negotiation/negotiation-reconcile.service";
+import { reconcileProductInBackground } from "@modules/negotiation/public";
 import { categoryService } from "@modules/catalog/category.service";
 import { Category } from "@models/categories/category.model";
 import {

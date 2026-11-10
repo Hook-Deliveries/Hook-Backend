@@ -47,8 +47,7 @@ import { LogisticsProviderService } from "@modules/fulfilment";
 import { HttpError, isDuplicateKeyError } from "@utils/http";
 import { emitOutbox } from "@modules/platform";
 import { wakeOutbox } from "../../jobs/wake";
-import { deriveLiveRules, resolveQuote } from "@modules/negotiation/negotiation-live-rules.service";
-import { voidQuote } from "@modules/negotiation/negotiation-reconcile.service";
+import { deriveLiveRules, resolveQuote, voidQuote } from "@modules/negotiation/public";
 import { timelineEntry } from "@lib/order-timeline";
 import { defaultProviderName } from "@modules/payments";
 

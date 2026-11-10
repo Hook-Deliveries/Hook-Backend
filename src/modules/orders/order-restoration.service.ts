@@ -4,7 +4,7 @@ import { CouponService } from '@modules/orders/coupon.service';
 import { CreditService } from '@modules/orders/credit.service';
 import { NegotiatedQuote } from '@models/catalog/catalog.model';
 import { NegotiatedQuoteStatus } from '@lib/constants';
-import { loadLiveRules, resolveQuote } from '@modules/negotiation/negotiation-live-rules.service';
+import { loadLiveRules, resolveQuote } from '@modules/negotiation/public';
 
 const coupons = new CouponService();
 const credits = new CreditService();

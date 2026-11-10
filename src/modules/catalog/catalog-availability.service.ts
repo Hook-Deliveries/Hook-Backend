@@ -7,7 +7,7 @@ import { byProductIdentifier } from '@modules/catalog/catalog.service';
 import { MarketVendorService } from '@modules/catalog/market-vendor.service';
 import { publishRealtime } from '@modules/platform';
 import { HttpError } from '@utils/http';
-import { reconcileProductInBackground } from '@modules/negotiation/negotiation-reconcile.service';
+import { reconcileProductInBackground } from '@modules/negotiation/public';
 
 function versionFilter(product: any, version: number) {
   const currentVersion = Number(product.catalogVersion || 1);

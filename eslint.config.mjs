@@ -26,7 +26,7 @@ export default tseslint.config(
         {
           patterns: [
             {
-              regex: `^@modules/(?!${name}/)[^/]+/`,
+              regex: `^@modules/(?!${name}/)[^/]+/(?!public$)[^/]+`,
               message: "A module must not reach into another module's files.",
             },
           ],
