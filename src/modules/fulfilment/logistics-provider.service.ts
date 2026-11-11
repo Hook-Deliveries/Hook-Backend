@@ -1,4 +1,5 @@
 import { LogisticsProvider } from '@models/logistics/logistics-provider.model';
+import { OperationState } from '@models/platform/geography.model';
 import { nextPublicId } from '@modules/platform';
 import { HttpError } from '@utils/http';
 
@@ -8,11 +9,21 @@ function identity(identifier: string) {
     : { $or: [{ publicId: identifier }, { code: identifier.toUpperCase() }] };
 }
 
+/** Every State a message group names must exist, so a typo or a deleted State cannot silently leave customers with no message. */
+async function assertKnownStates(rules: Array<{ stateIds: string[] }> | undefined) {
+  const ids = [...new Set((rules || []).flatMap((rule) => rule.stateIds))];
+  if (!ids.length) return;
+  const found = await OperationState.find({ publicId: { $in: ids } }).select('publicId').lean();
+  const known = new Set(found.map((state: any) => state.publicId));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length) throw new HttpError(400, `Unknown State: ${unknown.join(', ')}`, undefined, 'VALIDATION_ERROR');
+}
+
 export class LogisticsProviderService {
   /** The customer-facing picker at checkout. */
   async listActive() {
     return LogisticsProvider.find({ status: 'active', deletedAt: { $exists: false } })
-      .select('publicId code name logoUrl description feeMinor sortOrder')
+      .select('publicId code name logoUrl description feeMinor deliveryEstimates defaultEstimate sortOrder')
       .sort({ sortOrder: 1, name: 1 })
       .lean({ virtuals: true });
   }
@@ -45,11 +56,14 @@ export class LogisticsProviderService {
   }
 
   async create(input: Record<string, unknown>, actorId: string) {
+    await assertKnownStates(input.deliveryEstimates as any);
     const code = String(input.code).trim().toUpperCase();
     const existing = await LogisticsProvider.findOne({ code, deletedAt: { $exists: false } }).lean();
     if (existing) throw new HttpError(409, `A logistics provider with code "${code}" already exists`, undefined, 'CONFLICT');
+    const { defaultEstimate, ...rest } = input;
     return LogisticsProvider.create({
-      ...input,
+      ...rest,
+      ...(typeof defaultEstimate === 'string' && defaultEstimate.trim() ? { defaultEstimate: defaultEstimate.trim() } : {}),
       code,
       publicId: await nextPublicId('logisticsProvider'),
       createdBy: actorId,
@@ -57,6 +71,7 @@ export class LogisticsProviderService {
   }
 
   async update(identifier: string, input: Record<string, unknown>) {
+    await assertKnownStates(input.deliveryEstimates as any);
     const provider = await this.get(identifier);
     if (input.code) {
       const code = String(input.code).trim().toUpperCase();
@@ -68,11 +83,14 @@ export class LogisticsProviderService {
       if (clash) throw new HttpError(409, `A logistics provider with code "${code}" already exists`, undefined, 'CONFLICT');
       input.code = code;
     }
-    const updated = await LogisticsProvider.findByIdAndUpdate(
-      provider._id,
-      { $set: input },
-      { returnDocument: 'after' },
-    ).lean({ virtuals: true });
+    // An empty default message means "clear it".
+    const { defaultEstimate, ...rest } = input;
+    const update: Record<string, Record<string, unknown>> = { $set: rest };
+    if (typeof defaultEstimate === 'string') {
+      if (defaultEstimate.trim()) update.$set.defaultEstimate = defaultEstimate.trim();
+      else update.$unset = { defaultEstimate: 1 };
+    }
+    const updated = await LogisticsProvider.findByIdAndUpdate(provider._id, update, { returnDocument: 'after' }).lean({ virtuals: true });
     return updated;
   }
 

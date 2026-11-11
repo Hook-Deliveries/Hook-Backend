@@ -20,6 +20,7 @@ export function createDeviceRouter() {
   router.use(requireCustomerIdentity);
   router.post('/register', validateBody(deviceSchema), asyncHandler(controller.register));
   router.post('/unregister', validateBody(z.object({ expoPushToken: z.string().min(10).optional() })), asyncHandler(controller.unregister));
+  router.post('/test-push', asyncHandler(controller.testPush));
   router.get('/', asyncHandler(controller.list));
   router.patch('/:id', validateBody(z.object({ deviceName: z.string().trim().min(2).max(80) })), asyncHandler(controller.rename));
   router.delete('/others', asyncHandler(controller.revokeOthers));

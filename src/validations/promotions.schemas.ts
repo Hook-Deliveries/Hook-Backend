@@ -5,6 +5,12 @@ const reason = z.string().trim().min(3).max(500).optional();
 // Coupons affect what every customer pays, so unlike the optional `reason` above, an audit reason is mandatory here.
 const couponReason = z.string().trim().min(5).max(500);
 
+const deliveryEstimateRule = z.object({
+  id: z.string().trim().min(1).max(40),
+  message: z.string().trim().min(2).max(120),
+  stateIds: z.array(z.string().trim().min(2).max(40)).min(1).max(60),
+}).strict();
+
 export const logisticsProviderCreateSchema = z.object({
   code: z.string().trim().min(2).max(40),
   name: z.string().trim().min(2).max(80),
@@ -12,6 +18,18 @@ export const logisticsProviderCreateSchema = z.object({
   description: z.string().trim().max(300).optional(),
   feeMinor: moneyMinor.optional(),
   integration: z.enum(['manual', 'fez']).optional(),
+  deliveryEstimates: z.array(deliveryEstimateRule).max(20).superRefine((rules, context) => {
+    const seen = new Map<string, number>();
+    rules.forEach((rule, index) => rule.stateIds.forEach((stateId) => {
+      const first = seen.get(stateId);
+      if (first !== undefined && first !== index) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'stateIds'], message: 'A State can only be in one message group' });
+      }
+      seen.set(stateId, index);
+    }));
+  }).optional(),
+  // An empty string clears it.
+  defaultEstimate: z.string().trim().max(120).optional(),
   status: z.enum(['active', 'inactive']).default('active'),
   sortOrder: z.coerce.number().int().min(0).max(999).default(0),
   reason,
