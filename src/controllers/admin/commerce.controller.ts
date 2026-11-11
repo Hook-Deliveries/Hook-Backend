@@ -334,6 +334,7 @@ export class AdminCommerceController {
   pricingConfig = async (_req: Request, res: Response) => {
     const s = await CommerceSettings.findOne({ key: 'commerce' }).lean();
     sendSuccess(res, {
+      vatEnabled: s?.vatEnabled ?? true,
       vatRatePercent: s?.vatRatePercent ?? 7.5,
       defaultDeliveryFeeMinor: s?.defaultDeliveryFeeMinor ?? 300000,
       updatedAt: s?.updatedAt,

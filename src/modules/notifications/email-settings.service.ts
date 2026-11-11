@@ -48,3 +48,11 @@ export async function adminAppBaseUrl(): Promise<string> {
   const url = doc?.appUrl?.trim() || process.env.ADMIN_APP_URL || process.env.PUBLIC_WEB_URL || process.env.APP_URL || 'http://localhost:3000';
   return url.replace(/\/+$/, '');
 }
+
+// Base URL for links people open on the public Hook web app (e.g. account
+// activation). PUBLIC_WEB_URL wins; falls back to the admin/email base URL.
+export async function publicWebBaseUrl(): Promise<string> {
+  const configured = process.env.PUBLIC_WEB_URL?.trim();
+  if (configured && /^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '');
+  return adminAppBaseUrl();
+}

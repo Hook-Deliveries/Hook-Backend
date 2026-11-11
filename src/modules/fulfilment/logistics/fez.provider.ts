@@ -42,9 +42,15 @@ function weightKg(input: Record<string, unknown>) {
 export class FezLogisticsProvider implements LogisticsProvider {
   readonly name: LogisticsProviderName = 'fez';
   readonly enabled = true;
-  private readonly baseUrl = process.env.FEZ_BASE_URL || 'https://apisandbox.fezdelivery.co/v1';
+  // The sandbox is only a fallback outside production, so a forgotten setting can never book real parcels against it.
+  private readonly baseUrl = process.env.FEZ_BASE_URL || (process.env.NODE_ENV === 'production' ? '' : 'https://apisandbox.fezdelivery.co/v1');
+
+  private requireBaseUrl() {
+    if (!this.baseUrl) throw new HttpError(503, 'FEZ_BASE_URL is not set for production', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
+  }
 
   private secretKey() {
+    this.requireBaseUrl();
     const value = process.env.FEZ_SECRET_KEY;
     if (!value) throw new HttpError(503, 'Fez logistics is not configured', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
     return value;
@@ -57,20 +63,35 @@ export class FezLogisticsProvider implements LogisticsProvider {
     return { userId, password };
   }
 
+  /**
+   * One request to Fez. A network failure or a slow answer is tried once more before giving up, and the real
+   * reason is logged and put in the message, so "temporarily unavailable" is never all anyone gets to see.
+   */
+  private async call(path: string, init: RequestInit): Promise<Response> {
+    let failure: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return await fetch(`${this.baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(20_000) });
+      } catch (error) {
+        failure = error;
+        const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+        console.warn(`[fez] ${init.method || 'GET'} ${path} attempt ${attempt} failed: ${cause?.code || (error as Error).name} ${cause?.message || (error as Error).message}`);
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_500));
+      }
+    }
+    const timedOut = (failure as Error)?.name === 'TimeoutError';
+    throw new HttpError(503, timedOut ? 'Fez took too long to answer. Try again in a moment.' : 'Could not reach Fez. Check the connection and try again.', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
+  }
+
   private async authenticate(): Promise<string> {
+    this.requireBaseUrl();
     if (cachedSession && cachedSession.expiresAt > Date.now()) return cachedSession.authToken;
     const { userId, password } = this.credentials();
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}/user/authenticate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, password }),
-        signal: AbortSignal.timeout(15000),
-      });
-    } catch {
-      throw new HttpError(503, 'Fez is temporarily unavailable', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
-    }
+    const response = await this.call('/user/authenticate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, password }),
+    });
     const body = (await response.json().catch(() => ({}))) as Record<string, any>;
     const authToken = body.authDetails?.authToken as string | undefined;
     if (!response.ok || String(body.status || '').toLowerCase() !== 'success' || !authToken) {
@@ -87,12 +108,7 @@ export class FezLogisticsProvider implements LogisticsProvider {
   private async send(path: string, init: RequestInit, retrying = false): Promise<Record<string, any>> {
     const authToken = await this.authenticate();
     const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}`, 'secret-key': this.secretKey(), ...(init.headers as Record<string, string> | undefined) };
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}${path}`, { ...init, headers, signal: AbortSignal.timeout(15000) });
-    } catch {
-      throw new HttpError(503, 'Fez is temporarily unavailable', undefined, 'LOGISTICS_PROVIDER_UNAVAILABLE');
-    }
+    const response = await this.call(path, { ...init, headers });
     const body = (await response.json().catch(() => ({}))) as Record<string, any>;
     // A stale cached token gets exactly one retry with a fresh login before giving up.
     if (response.status === 401 && !retrying) {
@@ -154,7 +170,8 @@ export class FezLogisticsProvider implements LogisticsProvider {
         recipientState,
         uniqueID,
         BatchID: String(input.orderId),
-        valueOfItem: String(Math.round(Number(input.totalMinor || 0) / 100)),
+        // Goods only (no delivery fee or VAT). Everything is prepaid, so nothing is collected on delivery.
+        valueOfItem: String(Math.round(Number(input.goodsValueMinor ?? input.totalMinor ?? 0) / 100)),
         weight: weightKg(input),
         ...(hub.address ? { thirdparty: true, senderName: hub.name || 'Hook', senderAddress: hub.address, senderPhone: hub.phone, pickUpState, pickUpAddress: hub.address } : {}),
       }]),

@@ -42,7 +42,9 @@ export class FulfilmentController {
   recordReceiptPrint = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.recordReceiptPrint(actor(req), routeParam(req.params.id), req.body));
   customerReceipt = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.customerReceipt(req.user!.sub, routeParam(req.params.id)));
   sealConsolidation = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.sealConsolidation(actor(req), routeParam(req.params.id), req.body));
-  createShipment = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.createManualShipment(actor(req), routeParam(req.params.id), req.body));
+  shippingQueue = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.shippingQueue(actor(req), req.query as Record<string, unknown>));
+  shippingPreview = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.shippingPreview(actor(req), routeParam(req.params.id), req.body));
+  bookShipment = async (req: Request, res: Response) => sendCreated(res, await fulfilmentService.bookShipment(actor(req), routeParam(req.params.id), req.body));
   updateShipment = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.updateShipment(actor(req), routeParam(req.params.id), req.body));
   partnerCustody = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.partnerCustody(actor(req), routeParam(req.params.orderId)));
   partnerCustodyList = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.partnerCustodyList(actor(req), req.query as Record<string, unknown>));
@@ -65,11 +67,8 @@ export class FulfilmentController {
   fulfilmentOverview = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.overview(actor(req), req.query as Record<string, unknown>));
   adminShipments = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.shipments(actor(req), req.query as Record<string, unknown>));
   logisticsReadiness = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsReadiness(actor(req)));
-  logisticsWebhook = async (req: Request, res: Response) => sendSuccess(res, await fulfilmentService.logisticsWebhook(routeParam(req.params.provider), String(req.header('x-provider-event-id') || ''), req.body, String(req.header('x-provider-signature') || '')));
 
-  // Fez's own webhook contract (X-Signature/X-Timestamp headers, {orderNumber, status}
-  // body, no event id) doesn't fit the generic x-provider-* header scheme above, so it
-  // gets its own route rather than forcing a mismatched contract through the shared one.
+  // Fez's webhook contract: X-Signature/X-Timestamp headers and an {orderNumber, status} body with no event id.
   fezWebhook = async (req: Request, res: Response) => {
     const { orderNumber, status, orderStatus } = req.body as { orderNumber: string; status?: string; orderStatus?: string };
     // Fez's docs name the field `status` on one page and `orderStatus` on another.

@@ -60,6 +60,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationDefinition> = {
   pod_approved: T('orders', 'order'),
   prepayment_required: T('orders', 'order'),
   order_updated: T('orders', 'order'),
+  // Staff-facing alerts
+  order_paid: T('orders', 'order'),
+  order_operations_review: T('orders', 'order'),
+  ready_to_ship: T('orders', 'order'),
   order_in_fulfilment: T('orders', 'order'),
   hub_qc_passed: T('orders', 'order'),
   hub_qc_failed: T('orders', 'order'),

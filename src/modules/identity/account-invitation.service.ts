@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { adminAppBaseUrl } from '@modules/notifications';
+import { publicWebBaseUrl } from '@modules/notifications';
 import { AccountStatus, AccountType } from '@lib/constants';
 import { hashPassword } from '@lib/security';
 import { AccountInvitation } from '@models/platform/account-invitation.model';
@@ -53,7 +53,7 @@ export async function issueAccountInvitation(input: {
     expiresAt,
     invitedBy: input.invitedBy,
   });
-  const baseUrl = (await adminAppBaseUrl());
+  const baseUrl = (await publicWebBaseUrl());
   const activationUrl = `${baseUrl}${activationPath(input.accountType)}?token=${encodeURIComponent(token)}`;
   const delivery = await email.sendAccountInvitation({
     email: input.email,
@@ -93,7 +93,7 @@ export async function issueCustomerAccountSetup(input: {
     expiresAt,
     invitedBy: input.accountId,
   });
-  const baseUrl = (await adminAppBaseUrl());
+  const baseUrl = (await publicWebBaseUrl());
   const activationUrl = `${baseUrl}${activationPath(AccountType.CUSTOMER)}?token=${encodeURIComponent(token)}`;
   const delivery = await email.sendCustomerAccountSetup({
     email: input.email,
@@ -165,6 +165,12 @@ export async function acceptAccountInvitation(
     await StaffProfile.updateOne({ accountId: account.id }, profileUpdate);
   } else if (invitation.accountType === AccountType.MARKETASSOCIATE) {
     await MarketAssociateProfile.updateOne({ accountId: account.id }, profileUpdate);
+    // Markets they were given before activating start working for them now (loaded lazily: the fulfilment module is heavy).
+    const profile = await MarketAssociateProfile.findOne({ accountId: account.id }).select('_id').lean() as { _id: unknown } | null;
+    if (profile) {
+      const { fulfilmentService } = await import('@modules/fulfilment/fulfilment.service');
+      await fulfilmentService.onMarketAssociateActivated(String(profile._id)).catch(() => undefined);
+    }
   } else if (invitation.accountType === AccountType.PARTNER) {
     await HookPartner.updateOne({ accountId: account.id }, profileUpdate);
   }

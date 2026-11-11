@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, mock, test } from 'node:test';
-import { defaultPicks, percentOff, suggestionCandidates, unitFromTotal, validateOffer } from '../src/lib/negotiation-offer-rules';
+import { defaultPicks, midpointOffer, percentOff, suggestionCandidates, unitFromTotal, validateOffer } from '../src/lib/negotiation-offer-rules';
 import { Cart } from '../src/models/cart/cart.model';
-import { ProductVariant } from '../src/models/catalog/catalog.model';
+import { NegotiatedQuote, ProductVariant } from '../src/models/catalog/catalog.model';
 import { CommerceSettings } from '../src/models/commerce/commerce.model';
 import { Negotiation } from '../src/models/negotiations/negotiation.model';
 import { LegalContent } from '../src/models/platform/legal-content.model';
 import { Product } from '../src/models/products/product.model';
 import { User } from '../src/models/users/user.model';
 import { AzureNegotiationService, negotiationUnavailable, validateSuggestionPicks } from '../src/modules/negotiation/azure-negotiation.service';
+import { NegotiationService } from '../src/modules/negotiation/negotiation.service';
 import { clearOfferFlowCache, NegotiationOfferFlowService } from '../src/modules/negotiation/negotiation-offer-flow.service';
 import { resetDatabase, startDatabase, stopDatabase } from './helpers/replset';
 
@@ -173,27 +174,100 @@ test('an offer is made as a total and answered with totals', async () => {
   assert.equal(outcome.flow.maxTotalMinor, 9_400_000, 'the next offer must be below Hook\'s counter');
 });
 
-test('an accepted total is locked straight away at the per-item price', async () => {
+test('an accepted offer is NOT locked while offers remain: the customer chooses', async () => {
   world();
   await session();
-  mock.method(User, 'findOne', () => ({ lean: async () => ({ _id: 'customer_1' }) }));
   const outcome = await new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0002');
   assert.equal(outcome.result.decision, 'ACCEPT');
   assert.equal(outcome.result.acceptedTotalMinor, 9_400_000);
-  assert.equal(outcome.flow.status, 'agreed');
-  assert.equal(outcome.flow.locked?.totalMinor, 9_400_000);
-  assert.equal(outcome.flow.locked?.unitMinor, 4_700_000);
-  assert.equal(outcome.flow.locked?.savingsTotalMinor, 400_000);
+  assert.equal(outcome.flow.status, 'active');
+  assert.equal(outcome.flow.locked, undefined);
+  assert.equal(outcome.flow.priceAccepted, true);
+  assert.equal(outcome.flow.counter?.totalMinor, 9_400_000, "Hook's price is the accepted price");
+  assert.equal(outcome.flow.remainingOffers, 2);
+  assert.equal(outcome.flow.bestOffer, undefined, 'going lower is now the point');
+  assert.equal(await NegotiatedQuote.countDocuments({}), 0, 'no quote exists yet');
 });
 
-test('if the lock cannot be made the accepted offer is still reported, with the reason', async () => {
+test('after Hook accepts, the customer can try for less and is not held to "higher than your last offer"', async () => {
   world();
   await session();
-  mock.method(User, 'findOne', () => ({ lean: async () => null }));
-  const outcome = await new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0011');
-  assert.equal(outcome.result.decision, 'ACCEPT');
-  assert.ok(outcome.result.lockError);
-  assert.equal(outcome.flow.status, 'active');
+  const service = new NegotiationOfferFlowService();
+  await service.submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0020');
+  // Offering the accepted price again, or more, is pointless and refused without using a round.
+  await assert.rejects(service.submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0021'), { code: 'OFFER_ABOVE_COUNTER' });
+  // Trying for less is allowed even though it is lower than the customer's previous offer.
+  const next = await service.submitTotal(customer, 'neg_flow_1', 9_200_000, 'offer-flow-0022');
+  assert.equal(next.result.decision, 'ACCEPT');
+  assert.equal(next.flow.counter?.totalMinor, 9_200_000);
+  assert.equal(next.flow.priceAccepted, true);
+  assert.equal(next.flow.remainingOffers, 1);
+  assert.equal(next.flow.lastRound, true);
+});
+
+test('a try that falls short never makes the customer worse off than the price Hook already accepted', async () => {
+  world();
+  await session();
+  const service = new NegotiationOfferFlowService();
+  await service.submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0030');
+  const next = await service.submitTotal(customer, 'neg_flow_1', 8_000_000, 'offer-flow-0031');
+  assert.ok(next.flow.counter && next.flow.counter.totalMinor <= 9_400_000);
+});
+
+test('the customer locks an accepted price only by choosing to', async () => {
+  world();
+  await session();
+  mock.method(User, 'findOne', () => ({ lean: async () => ({ _id: 'customer_1' }) }));
+  await new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 9_400_000, 'offer-flow-0040');
+  await new NegotiationService().accept(customer, 'neg_flow_1');
+  const flow = await new NegotiationOfferFlowService().flow(customer, 'neg_flow_1');
+  assert.equal(flow.status, 'agreed');
+  assert.equal(flow.locked?.unitMinor, 4_700_000);
+  assert.equal(flow.locked?.totalMinor, 9_400_000);
+  assert.equal(flow.locked?.savingsTotalMinor, 400_000);
+});
+
+test('the best price is locked automatically only when the last offer is used', async () => {
+  world();
+  await session({ offerCount: 2, transcript: [
+    { id: 'a', sequence: 1, kind: 'text', role: 'customer', message: 'offer', offeredPriceMinor: 4_100_000, createdAt: new Date() },
+    { id: 'b', sequence: 2, kind: 'text', role: 'hook', message: 'counter', decision: 'COUNTER', counterPriceMinor: 4_700_000, createdAt: new Date() },
+    { id: 'c', sequence: 3, kind: 'text', role: 'customer', message: 'offer', offeredPriceMinor: 4_200_000, createdAt: new Date() },
+    { id: 'd', sequence: 4, kind: 'text', role: 'hook', message: 'counter', decision: 'COUNTER', counterPriceMinor: 4_500_000, createdAt: new Date() },
+  ], lastCounterPriceMinor: 4_500_000 });
+  const service = new NegotiationOfferFlowService();
+  const before = await service.flow(customer, 'neg_flow_1');
+  assert.equal(before.lastRound, true);
+  assert.equal(before.remainingOffers, 1);
+  const outcome = await service.submitTotal(customer, 'neg_flow_1', 8_600_000, 'offer-flow-0050');
+  assert.equal(outcome.flow.status, 'agreed');
+  assert.equal(outcome.flow.remainingOffers, 0);
+  assert.equal(outcome.flow.locked?.unitMinor, 4_300_000);
+});
+
+test('meet in the middle sits halfway between the offer and Hook\'s price and passes the same rules', async () => {
+  world();
+  await session({ offerCount: 1, lastCounterPriceMinor: 4_700_000, transcript: [
+    { id: 'a', sequence: 1, kind: 'text', role: 'customer', message: 'offer', offeredPriceMinor: 4_400_000, createdAt: new Date() },
+    { id: 'b', sequence: 2, kind: 'text', role: 'hook', message: 'counter', decision: 'COUNTER', counterPriceMinor: 4_700_000, createdAt: new Date() },
+  ] });
+  const service = new NegotiationOfferFlowService();
+  const flow = await service.flow(customer, 'neg_flow_1');
+  assert.equal(flow.counter?.totalMinor, 9_400_000);
+  assert.equal(flow.midpoint?.unitMinor, 4_550_000);
+  assert.equal(flow.midpoint?.totalMinor, 9_100_000);
+  assert.equal(flow.lastRound, false);
+  const outcome = await service.submitTotal(customer, 'neg_flow_1', flow.midpoint!.totalMinor, 'offer-flow-0060');
+  assert.ok(outcome.result.decision);
+});
+
+test('there is no middle to meet when the two prices are almost the same', async () => {
+  world();
+  await session({ offerCount: 1, lastCounterPriceMinor: 4_700_000, transcript: [
+    { id: 'a', sequence: 1, kind: 'text', role: 'customer', message: 'offer', offeredPriceMinor: 4_660_000, createdAt: new Date() },
+    { id: 'b', sequence: 2, kind: 'text', role: 'hook', message: 'counter', decision: 'COUNTER', counterPriceMinor: 4_700_000, createdAt: new Date() },
+  ] });
+  assert.equal((await new NegotiationOfferFlowService().flow(customer, 'neg_flow_1')).midpoint, undefined);
 });
 
 test('rejected offers never use up a round', async () => {
@@ -231,4 +305,11 @@ test('an offer on a negotiation that already ended is refused', async () => {
   world();
   await session({ status: 'closed' });
   await assert.rejects(new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 8_800_000, 'offer-flow-0010'), { code: 'INVALID_STATE_TRANSITION' });
+});
+
+test('midpointOffer rounds to whole ₦500 and never lands on either end', () => {
+  const middle = midpointOffer({ previousBestUnitMinor: 4_400_000, hookUnitMinor: 4_700_000, listUnitMinor: LIST, quantity: 2 });
+  assert.deepEqual(middle, { unitMinor: 4_550_000, totalMinor: 9_100_000, percentOff: 7.1 });
+  assert.equal(midpointOffer({ previousBestUnitMinor: 4_660_000, hookUnitMinor: 4_700_000, listUnitMinor: LIST, quantity: 1 }), undefined);
+  assert.equal(midpointOffer({ previousBestUnitMinor: 0, hookUnitMinor: 4_700_000, listUnitMinor: LIST, quantity: 1 }), undefined);
 });

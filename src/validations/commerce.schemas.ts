@@ -139,6 +139,7 @@ export const checkoutSettingsSchema = z.object({
 
 /** Pricing the admin controls: VAT and the platform default delivery fee. Every field optional; a reason is always required. */
 export const pricingConfigSchema = z.object({
+  vatEnabled: z.boolean().optional(),
   vatRatePercent: z.coerce.number().min(0).max(30).optional(),
   defaultDeliveryFeeMinor: z.coerce.number().int().min(0).max(100_000_000).optional(),
   reason: z.string().trim().min(5).max(500),

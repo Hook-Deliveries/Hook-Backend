@@ -113,7 +113,8 @@ async function main() {
     {
       label: 'shipments',
       model: Shipment as any,
-      replacement: { spec: { orderId: 1, fulfilmentGroupId: 1 }, options: { unique: true, sparse: true } },
+      // Not unique any more: an order can ship in several shipments and a cancelled one is re-booked.
+      replacement: { spec: { orderId: 1, fulfilmentGroupId: 1 }, options: {} },
     },
   ];
 

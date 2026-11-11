@@ -13,3 +13,9 @@ test('VAT stays sensible and unknown fields are rejected', () => {
   assert.throws(() => pricingConfigSchema.parse({ vatRatePercent: 45, reason: 'invalid vat' }));
   assert.throws(() => pricingConfigSchema.parse({ legacyFlag: true, reason: 'not a pricing field' }));
 });
+
+test('the VAT on/off switch is accepted on its own, and must be a real boolean', () => {
+  const parsed = pricingConfigSchema.parse({ vatEnabled: false, reason: 'Switch VAT off' });
+  assert.equal(parsed.vatEnabled, false);
+  assert.throws(() => pricingConfigSchema.parse({ vatEnabled: 'off', reason: 'not a boolean' }));
+});

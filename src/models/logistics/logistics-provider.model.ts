@@ -8,6 +8,8 @@ export interface LogisticsProvider extends BaseEntity {
   logoUrl?: string;
   description?: string;
   feeMinor: number;
+  /** How a booking is made: through the courier's live API, or recorded by hand. */
+  integration: 'manual' | 'fez';
   status: 'active' | 'inactive';
   sortOrder: number;
   createdBy?: string;
@@ -21,6 +23,7 @@ const schema = createSchema<LogisticsProvider>({
   description: { type: String, maxlength: 300 },
   // Deprecated: delivery is priced per State (OperationState.deliveryFeeMinor).
   feeMinor: { type: Number, default: 0, min: 0 },
+  integration: { type: String, enum: ['manual', 'fez'], default: 'manual' },
   status: { type: String, enum: ['active', 'inactive'], default: 'active', index: true },
   sortOrder: { type: Number, default: 0 },
   createdBy: { type: String },

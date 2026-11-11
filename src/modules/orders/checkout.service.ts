@@ -345,7 +345,7 @@ export class CheckoutService {
             defaultFeeMinor: settings.defaultDeliveryFeeMinor ?? DEFAULT_DELIVERY_FEE_MINOR,
           });
     // VAT is an admin setting, locked into the preview so confirm charges what was shown.
-    const vatFraction = Number(settings.vatRatePercent ?? 7.5) / 100;
+    const vatFraction = settings.vatEnabled === false ? 0 : Number(settings.vatRatePercent ?? 7.5) / 100;
     const money = await this.calculateMoney({
       customerId: actor.customerId,
       subtotalMinor,

@@ -59,6 +59,24 @@ export function suggestionCandidates(input: {
   return out.sort((a, b) => b.unitMinor - a.unitMinor);
 }
 
+/**
+ * "Meet in the middle": halfway between the customer's best offer and Hook's price, rounded down to whole ₦500.
+ * Undefined when the two are too close for a middle to be a real step. It is only a suggestion: it goes through the
+ * same rules and the same pricing engine as any other offer.
+ */
+export function midpointOffer(input: {
+  previousBestUnitMinor: number;
+  hookUnitMinor: number;
+  listUnitMinor: number;
+  quantity: number;
+}): Suggestion | undefined {
+  const gap = input.hookUnitMinor - input.previousBestUnitMinor;
+  if (input.previousBestUnitMinor <= 0 || gap < ROUNDING_KOBO * 2) return undefined;
+  const unit = roundDown(input.previousBestUnitMinor + gap / 2);
+  if (unit <= input.previousBestUnitMinor || unit >= input.hookUnitMinor) return undefined;
+  return { unitMinor: unit, totalMinor: unit * input.quantity, percentOff: percentOff(unit, input.listUnitMinor) };
+}
+
 /** Three evenly spread picks from the candidates (shallowest, middle, deepest). Used when the AI is not consulted. */
 export function defaultPicks<T>(candidates: T[]): T[] {
   if (candidates.length <= 3) return candidates;

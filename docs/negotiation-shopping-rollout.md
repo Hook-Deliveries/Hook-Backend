@@ -12,7 +12,10 @@ Customer negotiation is a guided flow, not a chat:
   quantity, with the per-item price alongside.
 - `POST /negotiations/:id/offer-total` with `{totalPriceMinor}` and an `Idempotency-Key`. The rules are checked
   before a round is spent (below the list price, a serious amount, below Hook's last counter, above the customer's
-  last offer). An accepted offer is locked immediately.
+  last offer). Nothing is locked automatically while offers remain: when Hook accepts a price the customer chooses to
+  lock it (`POST /negotiations/:id/accept`) or to try for less, and Hook keeps the best accepted price for them. The best
+  price is locked on its own only when the last offer is used. The flow also returns `priceAccepted`, `lastRound` and a
+  `midpoint` ("meet in the middle") suggestion, which goes through the same rules and pricing engine as any offer.
 - Existing `POST /negotiations`, `/accept` and `/close` are unchanged. The locked price goes into the cart with
   `POST /cart/items` and `quoteId`; the cart service rechecks price, options, ownership and expiry.
 

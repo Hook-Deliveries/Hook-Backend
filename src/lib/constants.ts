@@ -135,6 +135,8 @@ export enum HubPackageStatus {
   QC_PASSED = 'QC_PASSED',
   QC_FAILED = 'QC_FAILED',
   CONSOLIDATED = 'CONSOLIDATED',
+  // Booked on a courier shipment (see Shipment.hubPackageIds).
+  SHIPPED = 'SHIPPED',
   RETURNED = 'RETURNED',
 }
 
