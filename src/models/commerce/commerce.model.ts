@@ -102,8 +102,8 @@ export interface CommerceSettings extends BaseEntity {
   /** Smallest cart subtotal (kobo) that may be checked out. Smaller carts can be saved but not bought. */
   minimumCheckoutMinor: number;
   /** Kobo when flat, percent of the subtotal when percent. */
-  /** Master switch: when off, no VAT is charged or shown, whatever the rate below says. */
-  vatEnabled: boolean;
+  /** Master switch: when false no VAT is charged or shown, whatever the rate below says. */
+  vatEnabled?: boolean;
   /** VAT charged on products, as a percent. */
   vatRatePercent: number;
   activePolicyVersions: Record<string, string>;

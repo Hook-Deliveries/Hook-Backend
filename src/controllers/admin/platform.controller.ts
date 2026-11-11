@@ -1,3 +1,4 @@
+import { fulfilmentService } from '@modules/fulfilment/fulfilment.service';
 import { Request, Response } from 'express';
 import { announce } from '@modules/notifications/engagement-notifications.service';
 import { isValidObjectId, Model } from 'mongoose';
@@ -1905,6 +1906,8 @@ export class PlatformController {
       createdBy: req.user!.sub,
       history: [{ action: 'created', at: new Date(), actorId: req.user!.sub, reason: options.assignmentReason }],
     });
+    // The associate sees the market's orders and products straight away: anything waiting for it is handed over now.
+    await fulfilmentService.onMarketAssociateAssigned(assignment.id).catch((error) => console.warn('[assignment] could not hand over waiting orders', error instanceof Error ? error.message : error));
     await recordAudit(req, { action: 'marketassociate_assignment.created', entityType: 'marketassociate_assignment', entityId: assignment.id, stateId: assignment.stateId, hubId: assignment.preferredHubId, after: assignment.toObject(), reason: options.assignmentReason });
     return assignment;
   }
@@ -1949,6 +1952,7 @@ export class PlatformController {
       },
       $push: { history: { action: 'updated', at: new Date(), actorId: req.user!.sub, reason: req.body.assignmentReason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
+    if ((updated as any)?.status === 'active') await fulfilmentService.onMarketAssociateAssigned(assignment._id.toString()).catch((error) => console.warn('[assignment] could not hand over waiting orders', error instanceof Error ? error.message : error));
     await recordAudit(req, { action: 'marketassociate_assignment.updated', entityType: 'marketassociate_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: assignment, after: updated, reason: req.body.assignmentReason });
     await sendPlatformSuccess(res, updated);
   };
@@ -1962,6 +1966,7 @@ export class PlatformController {
       $set: { status, updatedBy: req.user!.sub, ...(status === 'ended' && { activeTo: new Date() }) },
       $push: { history: { action: status, at: new Date(), actorId: req.user!.sub, reason: req.body.reason } },
     }, { returnDocument: 'after' }).lean({ virtuals: true });
+    if (status === 'active') await fulfilmentService.onMarketAssociateAssigned(assignment._id.toString()).catch((error) => console.warn('[assignment] could not hand over waiting orders', error instanceof Error ? error.message : error));
     await recordAudit(req, { action: `marketassociate_assignment.${status}`, entityType: 'marketassociate_assignment', entityId: assignment._id.toString(), stateId: assignment.stateId, hubId: assignment.preferredHubId, before: { status: assignment.status }, after: { status }, reason: req.body.reason });
     await sendPlatformSuccess(res, updated);
   };

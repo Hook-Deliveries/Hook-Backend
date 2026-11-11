@@ -101,3 +101,22 @@ test('fez book: an unknown state fails with a clear error before anything is boo
   }), /not a Fez delivery state/);
   assert.equal(calls.some((call) => call.path === '/order'), false);
 });
+
+test('fez: one dropped connection is retried and the quote still comes back', async () => {
+  let dropped = 0;
+  mock.method(globalThis, 'fetch', async (url: string) => {
+    const path = String(url).replace(process.env.FEZ_BASE_URL as string, '');
+    if (path === '/user/authenticate') return json(200, { status: 'Success', authDetails: { authToken: 't', expireToken: '2099-01-01 10:00:00' } });
+    if (path === '/states') return json(200, { status: 'Success', states: [{ state: 'Lagos' }, { state: 'FCT' }] });
+    if (dropped === 0) { dropped += 1; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET', message: 'socket hang up' } }); }
+    return json(200, { status: 'Success', totalCost: 2500 });
+  });
+  const quote = await new FezLogisticsProvider().quote({ stateName: 'Lagos', weightGrams: 1000, hub: { stateName: 'Lagos' } });
+  assert.equal(quote.quoteMinor, 250000);
+  assert.equal(dropped, 1);
+});
+
+test('fez: when Fez cannot be reached at all the message says so, not just "unavailable"', async () => {
+  mock.method(globalThis, 'fetch', async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND' } }); });
+  await assert.rejects(new FezLogisticsProvider().quote({ stateName: 'Lagos', weightGrams: 1000, hub: { stateName: 'Lagos' } }), /Could not reach Fez/);
+});

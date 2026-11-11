@@ -17,6 +17,7 @@ export const logisticsProviderCreateSchema = z.object({
   logoUrl: z.string().url().optional(),
   description: z.string().trim().max(300).optional(),
   feeMinor: moneyMinor.optional(),
+  integration: z.enum(['manual', 'fez']).optional(),
   deliveryEstimates: z.array(deliveryEstimateRule).max(20).superRefine((rules, context) => {
     const seen = new Map<string, number>();
     rules.forEach((rule, index) => rule.stateIds.forEach((stateId) => {

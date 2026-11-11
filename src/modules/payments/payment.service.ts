@@ -26,7 +26,7 @@ import { publishRealtime } from "@modules/platform";
 import { timelineEntry } from "@lib/order-timeline";
 import { emitOutbox } from "@modules/platform";
 import { wakeOutbox } from "../../jobs/wake";
-import { notifyStaffByPermission } from "@modules/notifications";
+import { notifyStaffByPermission, paidOrderEvent } from "@modules/notifications";
 
 /** True when the provider may have acted on the request even though it failed. */
 export function isAmbiguousProviderError(error: unknown) {
@@ -505,6 +505,11 @@ export class PaymentService {
       wakeOutbox();
       const fresh = await Order.findById(order._id).lean({ virtuals: true });
       if (fresh) this.publishOrderUpdate(fresh);
+      if (fresh) {
+        // Everyone who can see orders is told as soon as a payment lands, scoped to the order's State.
+        const paid = paidOrderEvent(fresh, confirmedAt);
+        await notifyStaffByPermission({ permission: 'orders.view', stateId: paid.stateId, eventKeyPrefix: paid.eventKeyPrefix, title: paid.title, body: paid.body, type: paid.type, data: paid.data });
+      }
       if (fresh?.commerceStatus === CommerceOrderStatus.OPERATIONS_REVIEW) {
         await notifyStaffByPermission({
           permission: 'orders.edit', stateId: fresh.sourceStateId,

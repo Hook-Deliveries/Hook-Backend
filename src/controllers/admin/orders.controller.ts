@@ -26,6 +26,9 @@ import { restoreOrderIncentives } from "@modules/orders/order-restoration.servic
 import { splitOrderIntoGroups } from "@modules/orders/order-split.service";
 import { createCommerceNotification } from "@modules/notifications/commerce-notification.service";
 import { FulfilmentTask } from "@models/fulfilment/fulfilment.model";
+import { fulfilmentService } from "@modules/fulfilment/fulfilment.service";
+import { emitStaffEvent } from "@modules/notifications/staff-notifications.service";
+import { orderCancelledEvent } from "@modules/notifications/staff-notification-rules";
 import { MarketAssociateProfile } from "@models/platform/operations-accounts.model";
 import { OperationState } from "@models/platform/geography.model";
 
@@ -34,7 +37,7 @@ export class AdminOrdersController {
 
   private async enrichOrder(order: any) {
     if (!order) return order;
-    const [items, payments, fulfilmentGroups, logistics, escrowLedger] = await Promise.all([
+    const [items, payments, fulfilmentGroups, logistics, escrowLedger, fulfilmentTasks] = await Promise.all([
       adminRepos
         .orderItems()
         .find({ where: { orderId: order.id }, relations: { product: true } }),
@@ -44,6 +47,7 @@ export class AdminOrdersController {
       adminRepos
         .escrowLedger()
         .find({ where: { orderId: order.id }, order: { createdAt: "ASC" } }),
+      fulfilmentService.orderFulfilment(String(order.id)).catch(() => []),
     ]);
     // Every sourceStateId on the order and its delivery groups is a raw Mongo id — resolve
     // them all to readable names in one pass so neither the summary stat nor the delivery
@@ -63,7 +67,7 @@ export class AdminOrdersController {
       sourceStateName: stateById.get(String(group.sourceStateId))?.name,
     }));
     // "payment" is the order's primary payment summary; a replacement-item top-up must not stand in for it, though it still shows in the full "payments" list below.
-    return { ...order, items, payment: payments.find((entry: any) => !entry.itemResolutionId) || payments[0], payments, fulfilmentGroups: namedFulfilmentGroups, sourceStateNames, logistics, escrowLedger };
+    return { ...order, items, payment: payments.find((entry: any) => !entry.itemResolutionId) || payments[0], payments, fulfilmentGroups: namedFulfilmentGroups, fulfilmentTasks, sourceStateNames, logistics, escrowLedger };
   }
 
   list = async (req: Request, res: Response) => {
@@ -286,6 +290,7 @@ export class AdminOrdersController {
     );
 
     await notifyStatus(String(order._id), CommerceOrderStatus.CANCELLED);
+    await emitStaffEvent(orderCancelledEvent(order, reason), "orders.view");
     // A live task (e.g. an order cancelled mid-sourcing) must
     // stop and its Market Associate must be told, or they keep working an order that no longer exists.
     const activeTasks = await FulfilmentTask.find({

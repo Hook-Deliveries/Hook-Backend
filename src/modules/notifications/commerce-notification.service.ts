@@ -10,17 +10,23 @@ export async function createCommerceNotification(input: {
   body: string;
   type: string;
   data?: Record<string, unknown>;
+  /** Catch-up deliveries: no push and no toast, and the notification keeps the time of the event it is about. */
+  silent?: boolean;
+  at?: Date;
 }) {
+  const { silent, at, ...fields } = input;
   const definition = definitionFor(input.type);
   const result = await Notification.findOneAndUpdate(
     { eventKey: input.eventKey },
-    { $setOnInsert: { ...input, isRead: false, group: definition.group, priority: definition.priority } },
-    { upsert: true, returnDocument: "after", includeResultMetadata: true },
+    { $setOnInsert: { ...fields, ...(at ? { createdAt: at, updatedAt: at } : {}), isRead: false, group: definition.group, priority: definition.priority } },
+    // A catch-up row keeps the time of the event it is about, so Mongoose's own insert timestamps are switched off for it.
+    { upsert: true, returnDocument: "after", includeResultMetadata: true, ...(at ? { timestamps: false } : {}) },
   );
   // Replays still invalidate the bell's cache (cheap, keeps counts correct), but only
   // a genuine first insert carries title/body/href — that's what lets the frontend pop
   // a toast without a second round-trip, and a replay must not toast twice.
   const isNew = !result.lastErrorObject?.updatedExisting;
+  if (silent) return result.value;
   publishRealtime(
     { type: "notification.created", entityId: input.eventKey, version: 1, data: isNew ? { title: input.title, body: input.body, href: (input.data as { href?: string } | undefined)?.href } : undefined },
     { accountId: input.userId },

@@ -1,3 +1,4 @@
+import { emitStaffEvent, orderCancelledEvent } from '@modules/notifications';
 import mongoose from 'mongoose';
 import { CreditService } from '@modules/orders/credit.service';
 import { PaymentLink } from '@models/payments/payment-link.model';
@@ -340,7 +341,8 @@ export class OrderService {
           ? shipments.find((entry: any) => String(entry.sourceStateId) === String(group.sourceStateId))
           : undefined);
       const shipmentStatus = String(shipment?.status || '').toUpperCase();
-      const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus);
+      // Show the courier reference as soon as a shipment is booked, so the customer can follow the whole journey, not just the last mile.
+      const trackingVisible = DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus) || (Boolean(shipment?.trackingNumber) && shipmentStatus !== 'CANCELLED');
       // Ungrouped items are only safe to show when there is a single delivery to attribute them to.
       const groupItems = items
         .filter((item: any) => (item.fulfilmentGroupId ? item.fulfilmentGroupId === group.publicId : fulfilmentGroups.length <= 1))
@@ -368,7 +370,9 @@ export class OrderService {
           substitutionReason: shipment.substitutionReason,
           trackingReference: trackingVisible ? shipment.trackingNumber : undefined,
           status: shipment.status,
-          dispatchedAt: trackingVisible ? shipment.pickedUpAt || shipment.bookedAt : undefined,
+          dispatchedAt: DISPATCHED_SHIPMENT_STATUSES.has(shipmentStatus) ? shipment.pickedUpAt || shipment.bookedAt : undefined,
+          bookedAt: trackingVisible ? shipment.bookedAt : undefined,
+          pickedUpAt: shipment.pickedUpAt,
           deliveredAt: shipment.deliveredAt,
         } : undefined,
       };
@@ -461,6 +465,8 @@ export class OrderService {
       await new CreditService().announceRefund(owner.userId, String(stored._id), Number(saved.creditsAppliedMinor)).catch(() => undefined);
     }
     publishRealtime({ type: 'order.updated', entityId: saved.publicId || saved.id, version: Number(saved.__v || 1) }, { accountId: owner.userId, admin: true });
+    // Staff hear about a customer cancelling an order they may already be working on (paid orders only: an unpaid one was never theirs).
+    if (saved.commercePaymentStatus === 'CONFIRMED') await emitStaffEvent(orderCancelledEvent(saved, 'cancelled by the customer'), 'orders.view');
     if (owner.userId) {
       await createCommerceNotification({
         eventKey: `order:${saved.publicId || saved.id}:cancelled`,

@@ -4,6 +4,7 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
 import { NotificationService } from '@modules/notifications/notification.service';
+import { syncStaffNotifications } from '@modules/notifications/staff-notifications.service';
 import { sendSuccess } from '@utils/http';
 import { routeParam } from '@lib/api-utils';
 
@@ -15,6 +16,8 @@ export class AdminNotificationsController {
   );
 
   list = async (req: Request, res: Response) => {
+    // Opening the list first brings in anything this account's permissions cover that it has not been told yet.
+    if (typeof req.query.cursor !== 'string') await syncStaffNotifications(req.user!.sub);
     sendSuccess(res, await this.notifications.list({ userId: req.user!.sub }, {
       limit: Number(req.query.limit || 30),
       cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,

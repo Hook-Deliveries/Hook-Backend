@@ -1,6 +1,7 @@
 import { NegotiationStatus } from '@lib/constants';
 import {
   defaultPicks,
+  midpointOffer,
   MIN_OFFER_SHARE,
   percentOff,
   suggestionCandidates,
@@ -38,7 +39,18 @@ export interface OfferFlow {
   remainingOffers: number;
   maximumOffers: number;
   expiresAt?: string;
+  /** Hook's best price so far: its latest counter, or the price it accepted, whichever is lower. */
   counter?: { unitMinor: number; totalMinor: number; percentOff: number };
+  /**
+   * Hook has accepted a price but it is NOT locked, because offers remain. The customer chooses: lock it, or try for
+   * less. A price is only locked automatically when the last offer is used.
+   */
+  priceAccepted: boolean;
+  /** This is the customer's final offer. */
+  lastRound: boolean;
+  /** Halfway between the customer's best offer and Hook's price, when the gap is wide enough to be worth a step. */
+  midpoint?: Suggestion;
+  /** The customer's best offer so far. Omitted once Hook has accepted a price, since going lower is then the point. */
   bestOffer?: { unitMinor: number; totalMinor: number };
   locked?: { quoteId: string; unitMinor: number; totalMinor: number; savingsTotalMinor: number; percentOff: number; expiresAt: string };
   /** The locked price was cancelled because the product changed. */
@@ -93,7 +105,7 @@ export class NegotiationOfferFlowService {
     // detail() also expires a timed-out session and resolves the locked price against today's product rules.
     const base: any = await this.negotiations.detail(identity, id);
     const session = await Negotiation.findOne({ publicId: base.negotiationId, customerId: identity.customerId })
-      .select('productId variantId transcript lastCounterPriceMinor')
+      .select('productId variantId transcript lastCounterPriceMinor agreedPriceMinor')
       .lean();
     if (!session) throw new HttpError(404, 'Negotiation not found', undefined, 'NOT_FOUND');
 
@@ -111,7 +123,15 @@ export class NegotiationOfferFlowService {
     const active = status === NegotiationStatus.ACTIVE;
     const customerOffers = (session.transcript || []).filter((entry: any) => entry.role === 'customer' && entry.offeredPriceMinor);
     const previousBestUnit = customerOffers.reduce((best: number, entry: any) => Math.max(best, Number(entry.offeredPriceMinor)), 0);
-    const counterUnit = active && session.lastCounterPriceMinor ? clampToLive(Number(session.lastCounterPriceMinor), live) : undefined;
+    const lastCounterUnit = active && session.lastCounterPriceMinor ? clampToLive(Number(session.lastCounterPriceMinor), live) : 0;
+    const agreedUnit = active && session.agreedPriceMinor ? clampToLive(Number(session.agreedPriceMinor), live) : 0;
+    // Hook's best price so far, and whether it is one Hook has already said yes to.
+    const hookUnit = [lastCounterUnit, agreedUnit].filter((value) => value > 0).reduce((low, value) => Math.min(low, value), Infinity);
+    const counterUnit = Number.isFinite(hookUnit) ? hookUnit : undefined;
+    const priceAccepted = Boolean(agreedUnit && (!lastCounterUnit || agreedUnit <= lastCounterUnit));
+    // Once Hook has accepted a price the customer's next move is to try for less, so "higher than your last offer"
+    // no longer applies.
+    const ruleBestUnit = priceAccepted ? 0 : previousBestUnit;
 
     const history: OfferFlow['history'] = [];
     (session.transcript || []).forEach((entry: any, index: number, all: any[]) => {
@@ -138,7 +158,7 @@ export class NegotiationOfferFlowService {
         floorUnitMinor: live.floorMinor,
         quantity,
         counterUnitMinor: counterUnit,
-        previousBestUnitMinor: previousBestUnit,
+        previousBestUnitMinor: ruleBestUnit,
       });
       const product = await Product.findById(session.productId).select('title description').lean();
       suggestions = await this.pick(`${base.negotiationId}:${base.version}:${counterUnit || 0}`, candidates, {
@@ -165,7 +185,15 @@ export class NegotiationOfferFlowService {
       maximumOffers: Number(base.maximumOffers || 0),
       expiresAt: base.expiresAt,
       ...(counterUnit ? { counter: { unitMinor: counterUnit, totalMinor: counterUnit * quantity, percentOff: percentOff(counterUnit, listUnitMinor) } } : {}),
-      ...(previousBestUnit ? { bestOffer: { unitMinor: previousBestUnit, totalMinor: previousBestUnit * quantity } } : {}),
+      priceAccepted: active && priceAccepted,
+      lastRound: active && remainingOffers === 1,
+      ...(active && counterUnit && !priceAccepted && remainingOffers > 0
+        ? (() => {
+            const middle = midpointOffer({ previousBestUnitMinor: previousBestUnit, hookUnitMinor: counterUnit, listUnitMinor, quantity });
+            return middle ? { midpoint: middle } : {};
+          })()
+        : {}),
+      ...(ruleBestUnit ? { bestOffer: { unitMinor: ruleBestUnit, totalMinor: ruleBestUnit * quantity } } : {}),
       ...(lockedUnit && quote
         ? {
             locked: {
@@ -213,20 +241,11 @@ export class NegotiationOfferFlowService {
       offeredPriceMinor: unitMinor,
       message: `My offer is ${naira(unitMinor * before.quantity)}${items}`,
     });
-    // An accepted offer is a deal: lock the price now so the customer can go straight to the cart.
-    let lockError: string | undefined;
-    if (result.decision === 'ACCEPT' && result.status === NegotiationStatus.ACTIVE) {
-      try {
-        await this.negotiations.accept(identity, id);
-      } catch (error) {
-        if (!(error instanceof HttpError)) throw error;
-        lockError = error.message;
-      }
-    }
+    // Nothing is locked here. An accepted price waits for the customer while offers remain (they can lock it, or try for
+    // less); the offer service itself locks the best price when the last offer is used.
     const flow = await this.flow(identity, id);
     return {
       result: {
-        ...(lockError ? { lockError } : {}),
         decision: result.decision as 'ACCEPT' | 'COUNTER' | 'DECLINE' | undefined,
         message: result.message as string | undefined,
         offerTotalMinor: unitMinor * before.quantity,

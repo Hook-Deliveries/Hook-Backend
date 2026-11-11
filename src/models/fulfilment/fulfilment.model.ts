@@ -112,6 +112,10 @@ export interface HubPackage extends BaseEntity {
   evidence: FulfilmentEvidence[];
   version: number;
   receiveIdempotencyKey?: string;
+  /** Set while the package is on a courier shipment; cleared if that shipment is cancelled. */
+  shipmentId?: string;
+  /** Every time its Hook receipt was printed or downloaded, so a duplicate label can be traced. */
+  receiptPrints?: Array<{ by: string; at: Date; size?: string }>;
 }
 
 export interface Consolidation extends BaseEntity {
@@ -132,7 +136,7 @@ export interface Consolidation extends BaseEntity {
   version: number;
 }
 
-export type LogisticsProviderKey = 'manual' | 'simulated' | 'gig' | 'fez' | 'other';
+export type LogisticsProviderKey = 'manual' | 'fez';
 
 export interface Shipment extends BaseEntity {
   publicId: string;
@@ -140,7 +144,16 @@ export interface Shipment extends BaseEntity {
   fulfilmentGroupId?: string;
   sourceStateId: string;
   hubId: string;
-  consolidationId: string;
+  /** Legacy: only shipments booked through the old consolidate-and-seal flow carry this. */
+  consolidationId?: string;
+  /** The hub packages this shipment carries. One order can ship together or in separate shipments. */
+  hubPackageIds?: string[];
+  fulfilmentGroupIds?: string[];
+  weightGrams?: number;
+  /** Value of the goods only (no delivery fee or VAT); what the courier insures against. */
+  goodsValueMinor?: number;
+  /** Hook receipt number for this parcel: RCT-<order>, then RCT-<order>-P2, -P3 for further shipments. */
+  receiptNumber?: string;
   provider: LogisticsProviderKey;
   /**
    * The courier the customer actually chose and paid for at checkout, e.g.
@@ -284,7 +297,7 @@ runnerPackageSchema.index(
 
 const hubPackageSchema = createSchema<HubPackage>({
   publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, taskId: { type: String, required: true, index: true }, runnerPackageId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, marketAssociateId: { type: String, required: true, index: true },
-  status: { type: String, enum: Object.values(HubPackageStatus), default: HubPackageStatus.RECEIVED, index: true }, itemIds: { type: [String], default: [] }, receivedAt: { type: Date }, receivedBy: { type: String }, qualityChecks: { type: [Object], default: [] }, qcPassedAt: { type: Date }, qcPassedBy: { type: String }, custodyHistory: { type: [Object], default: [] }, evidence, version: { type: Number, default: 1, min: 1 }, receiveIdempotencyKey: { type: String, unique: true, sparse: true },
+  status: { type: String, enum: Object.values(HubPackageStatus), default: HubPackageStatus.RECEIVED, index: true }, itemIds: { type: [String], default: [] }, receivedAt: { type: Date }, receivedBy: { type: String }, qualityChecks: { type: [Object], default: [] }, qcPassedAt: { type: Date }, qcPassedBy: { type: String }, custodyHistory: { type: [Object], default: [] }, evidence, version: { type: Number, default: 1, min: 1 }, receiveIdempotencyKey: { type: String, unique: true, sparse: true }, shipmentId: { type: String, index: true, sparse: true }, receiptPrints: { type: [Object], default: [] },
 });
 
 const consolidationSchema = createSchema<Consolidation>({
@@ -297,16 +310,16 @@ consolidationSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, 
 consolidationSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const shipmentSchema = createSchema<Shipment>({
-  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true, index: true }, courierCode: { type: String, index: true }, courierName: { type: String }, substitutedFrom: { type: String }, substitutionReason: { type: String }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
+  publicId: { type: String, required: true, unique: true, index: true }, orderId: { type: String, required: true, index: true }, fulfilmentGroupId: { type: String, index: true, sparse: true }, sourceStateId: { type: String, required: true, index: true }, hubId: { type: String, required: true, index: true }, consolidationId: { type: String, index: true, sparse: true }, hubPackageIds: { type: [String], default: undefined, index: true }, fulfilmentGroupIds: { type: [String], default: undefined }, weightGrams: { type: Number, min: 0 }, goodsValueMinor: { type: Number, min: 0 }, receiptNumber: { type: String, index: true, sparse: true }, provider: { type: String, enum: ['manual', 'fez'], required: true, index: true }, courierCode: { type: String, index: true }, courierName: { type: String }, substitutedFrom: { type: String }, substitutionReason: { type: String }, serviceName: { type: String }, externalReference: { type: String, index: true, sparse: true }, status: { type: String, enum: Object.values(ShipmentStatus), default: ShipmentStatus.READY_FOR_BOOKING, index: true }, deliveryAddressSnapshot: { type: Object, required: true }, estimatedDeliveryAt: { type: Date }, bookedAt: { type: Date }, pickedUpAt: { type: Date }, deliveredAt: { type: Date }, failedAt: { type: Date }, providerCostMinor: { type: Number, min: 0 }, providerQuoteMinor: { type: Number, min: 0 }, trackingNumber: { type: String }, trackingEvents: { type: [Object], default: [] }, evidence, bookingIdempotencyKey: { type: String, unique: true, sparse: true }, version: { type: Number, default: 1, min: 1 },
 });
-// Unique per fulfilment group, not per state: an order split into several
-// deliveries has multiple groups in the same state. Sparse so legacy rows
-// written before fulfilmentGroupId existed do not collide on null.
-shipmentSchema.index({ orderId: 1, fulfilmentGroupId: 1 }, { unique: true, sparse: true });
+// Not unique: an order can ship in several shipments, and a cancelled shipment
+// is re-booked. Double booking is prevented by claiming the hub packages
+// (HubPackage.status QC_PASSED -> SHIPPED) inside the booking transaction.
+shipmentSchema.index({ orderId: 1, fulfilmentGroupId: 1 });
 shipmentSchema.index({ orderId: 1, sourceStateId: 1 });
 
 const manifestSchema = createSchema<PickupManifest>({
-  publicId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, shipmentIds: { type: [String], default: [] }, status: { type: String, enum: ['OPEN', 'HANDED_OVER', 'CLOSED', 'CANCELLED'], default: 'OPEN', index: true }, handoverReference: { type: String }, evidence, handedOverAt: { type: Date }, handedOverBy: { type: String },
+  publicId: { type: String, required: true, unique: true, index: true }, hubId: { type: String, required: true, index: true }, provider: { type: String, enum: ['manual', 'fez'], required: true }, shipmentIds: { type: [String], default: [] }, status: { type: String, enum: ['OPEN', 'HANDED_OVER', 'CLOSED', 'CANCELLED'], default: 'OPEN', index: true }, handoverReference: { type: String }, evidence, handedOverAt: { type: Date }, handedOverBy: { type: String },
 });
 
 
@@ -323,7 +336,7 @@ const refundSchema = createSchema<FulfilmentRefund>({
 });
 
 const logisticsEventSchema = createSchema<LogisticsWebhookEvent>({
-  provider: { type: String, enum: ['manual', 'simulated', 'gig', 'fez', 'other'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date }, lockedUntil: { type: Date },
+  provider: { type: String, enum: ['manual', 'fez'], required: true }, providerEventId: { type: String, required: true }, payloadHash: { type: String, required: true }, shipmentId: { type: String, index: true }, eventType: { type: String, required: true }, signatureVerified: { type: Boolean, default: false }, status: { type: String, enum: ['RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'], default: 'RECEIVED', index: true }, receivedAt: { type: Date, default: Date.now }, processedAt: { type: Date }, lockedUntil: { type: Date },
 });
 logisticsEventSchema.index({ provider: 1, providerEventId: 1 }, { unique: true });
 
