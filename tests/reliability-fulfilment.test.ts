@@ -8,25 +8,27 @@ import { Shipment, LogisticsWebhookEvent } from '../src/models/fulfilment/fulfil
 import { Order } from '../src/models/orders/order.model';
 
 before(async () => {
-  process.env.LOGISTICS_MANUAL_WEBHOOK_SECRET = 'test-secret';
+  // Fez is the only webhook provider; it signs orderNumber + status + timestamp with the account secret key.
+  Object.assign(process.env, { LOGISTICS_FEZ_ENABLED: 'true', FEZ_SECRET_KEY: 'test-secret' });
   await startDatabase();
 });
 after(stopDatabase);
 beforeEach(async () => { mock.restoreAll(); await resetDatabase(); });
 
-const sign = (payload: Record<string, unknown>) => createHmac('sha256', 'test-secret').update(JSON.stringify(payload)).digest('hex');
+const TIMESTAMP = '1700000000';
+const sign = (payload: Record<string, unknown>) => createHmac('sha256', 'test-secret').update(`${payload.orderNumber || ''}${payload.status || ''}${TIMESTAMP}`).digest('hex');
 
 async function seed() {
   const orderId = new mongoose.Types.ObjectId();
   await Order.collection.insertOne({ _id: orderId, publicId: 'ORD-L-1', userId: 'u1', commerceStatus: 'READY_FOR_DISPATCH', timeline: [], sourceStateId: 'st', createdAt: new Date(), updatedAt: new Date() } as any);
   await Shipment.collection.insertOne({
     publicId: 'SHP-L-1', orderId: String(orderId), sourceStateId: 'st', hubId: 'hub', status: 'AWAITING_PICKUP', version: 1,
-    trackingEvents: [], provider: 'manual', createdAt: new Date(), updatedAt: new Date(),
+    trackingEvents: [], provider: 'fez', createdAt: new Date(), updatedAt: new Date(),
   } as any);
   return String(orderId);
 }
 
-const deliver = (id: string, payload: Record<string, unknown>) => fulfilmentService.logisticsWebhook('manual', id, payload, sign(payload));
+const deliver = (id: string, payload: Record<string, unknown>) => fulfilmentService.logisticsWebhook('fez', id, payload, sign(payload), TIMESTAMP);
 
 test('logistics webhook: one delivery moves the shipment and order together, a replay is a duplicate', async () => {
   const orderId = await seed();
@@ -46,7 +48,7 @@ test('logistics webhook: one delivery moves the shipment and order together, a r
 test('logistics webhook: an event left RECEIVED by a failed attempt is reprocessed on the provider retry', async () => {
   await seed();
   const payload = { shipmentId: 'SHP-L-1', status: 'PICKED_UP' };
-  await LogisticsWebhookEvent.create({ provider: 'manual', providerEventId: 'evt-2', payloadHash: 'x', eventType: 'PICKED_UP', signatureVerified: true, status: 'RECEIVED', receivedAt: new Date() });
+  await LogisticsWebhookEvent.create({ provider: 'fez', providerEventId: 'evt-2', payloadHash: 'x', eventType: 'PICKED_UP', signatureVerified: true, status: 'RECEIVED', receivedAt: new Date() });
   const retry: any = await deliver('evt-2', payload);
   assert.equal(retry.accepted, true, 'must not be swallowed as a duplicate');
   assert.equal(((await Shipment.findOne({ publicId: 'SHP-L-1' }).lean()) as any).status, 'PICKED_UP');
