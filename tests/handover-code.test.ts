@@ -62,7 +62,7 @@ test('the Hub accepts the right code, after which the task is received and the c
 
   await receive(packageId, code);
   const after = await detail();
-  assert.equal(after.status, 'HUB_RECEIVED');
+  assert.equal(after.status, 'QC_PASSED');  // hub quality check is off: a received package goes straight to Shipping
   assert.equal(after.package.status, 'HUB_RECEIVED');
   assert.equal(after.package.scanCredential, undefined, 'the code is not shown once custody has changed');
   assert.equal((await RunnerPackage.findOne({ publicId: packageId }).select('+scanCredentialCiphertext').lean() as any).scanCredentialCiphertext, undefined);
@@ -104,7 +104,7 @@ test('an unreadable code does not break the task; the associate can request a ne
   const packageId = (await detail()).package.publicId;
   if (original !== code) await rejects(() => receive(packageId, original), (error) => error.code === 'ACCESS_DENIED');
   await receive(packageId, code);
-  assert.equal((await detail()).status, 'HUB_RECEIVED');
+  assert.equal((await detail()).status, 'QC_PASSED');
 });
 
 test('a readable code is never rotated, and a locked package cannot be reissued by the associate', async () => {
