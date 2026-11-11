@@ -26,8 +26,7 @@ import { publishRealtime } from "@modules/platform";
 import { timelineEntry } from "@lib/order-timeline";
 import { emitOutbox } from "@modules/platform";
 import { wakeOutbox } from "../../jobs/wake";
-import { notifyStaffByPermission } from "@modules/notifications";
-import { paidOrderEvent } from "@modules/notifications/staff-notification-rules";
+import { notifyStaffByPermission, paidOrderEvent } from "@modules/notifications";
 
 /** True when the provider may have acted on the request even though it failed. */
 export function isAmbiguousProviderError(error: unknown) {

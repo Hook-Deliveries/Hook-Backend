@@ -91,7 +91,7 @@ async function catchUp(accountId: string): Promise<number> {
     // A rule the account could not see at the last sync (a new role, a new permission) is caught up from scratch.
     const known = cursor?.rules.includes(rule.key);
     const since = known && cursor ? new Date(cursor.syncedUntil.getTime() - OVERLAP_MS) : firstLook;
-    let events: StaffEvent[] = [];
+    let events: StaffEvent[];
     try { events = await rule.collect(since); } catch (error) { console.warn(`[staff-notifications] ${rule.key} catch-up failed`, error instanceof Error ? error.message : error); continue; }
     for (const event of events) {
       if (!canReceiveStaffAlert(access, rule.permission, event.stateId, event.hubId)) continue;

@@ -1,5 +1,4 @@
-import { emitStaffEvent } from '@modules/notifications/staff-notifications.service';
-import { orderCancelledEvent } from '@modules/notifications/staff-notification-rules';
+import { emitStaffEvent, orderCancelledEvent } from '@modules/notifications';
 import mongoose from 'mongoose';
 import { CreditService } from '@modules/orders/credit.service';
 import { PaymentLink } from '@models/payments/payment-link.model';

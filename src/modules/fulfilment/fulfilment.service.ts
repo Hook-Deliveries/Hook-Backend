@@ -37,8 +37,7 @@ import { EmailService } from '@emails/email.service';
 import { HttpError } from '@utils/http';
 import { timelineEntry, notifyStatus } from '@lib/order-timeline';
 import { notifyStaffByPermission } from '@modules/notifications';
-import { readyToShipEvent, describeTasks, taskMilestoneEvent, shipmentMomentEvent, refundEvent, type TaskMilestone, type ShipmentMoment } from '@modules/notifications/staff-notification-rules';
-import { emitStaffEvent } from '@modules/notifications/staff-notifications.service';
+import { emitStaffEvent, readyToShipEvent, describeTasks, taskMilestoneEvent, shipmentMomentEvent, refundEvent, type TaskMilestone, type ShipmentMoment } from '@modules/notifications';
 import { encryptPackageCredential, tryDecryptPackageCredential } from '@lib/package-credential-crypto';
 
 /**
