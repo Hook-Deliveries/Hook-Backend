@@ -14,6 +14,7 @@ import {
 import { Market } from "@models/platform/network.model";
 import { User } from "@models/users/user.model";
 import { asyncHandler, HttpError, sendSuccess } from "@utils/http";
+import { MarketVendorService } from "@modules/catalog/market-vendor.service";
 import { MarketAssociateCatalogController } from "@controllers/market-associate/catalog.controller";
 import {
   negotiationCreateSchema,
@@ -97,6 +98,7 @@ export function createMarketAssociateRouter() {
   const catalog = new MarketAssociateCatalogController();
   const fulfilment = new FulfilmentController();
   const marketVendors = new MarketAssociateMarketVendorController();
+  const marketVendorService = new MarketVendorService();
   router.use(requireAuth, requireAccountType(AccountType.MARKETASSOCIATE));
   mountNotificationRoutes(router);
   router.get(
@@ -173,7 +175,11 @@ export function createMarketAssociateRouter() {
         _id: { $in: assignments.map((item) => item.marketId) },
         status: "active",
       }).lean({ virtuals: true });
-      sendSuccess(res, { assignments, markets });
+      const stats = await marketVendorService.marketOverviewStats(markets.map((market: any) => String(market._id)), profile._id.toString());
+      sendSuccess(res, {
+        assignments,
+        markets: markets.map((market: any) => ({ ...market, stats: stats.get(String(market._id)) })),
+      });
     }),
   );
   router.get('/markets/:id', asyncHandler(marketVendors.market));

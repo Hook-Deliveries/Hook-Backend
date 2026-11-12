@@ -20,7 +20,6 @@ export class MarketAssociateMarketVendorController {
   create = async (req: Request, res: Response) => {
     const result = await service.createMarketAssociateVendor(req.user!.sub, routeParam(req.params.id), req.body);
     await recordAudit(req, { action: 'market.vendor.created', entityType: 'market_vendor', entityId: result.vendor.id, entityPublicId: result.vendor.publicId, stateId: result.vendor.stateId, after: result.vendor });
-    await recordAudit(req, { action: 'market.vendor.invited', entityType: 'vendor_invitation', entityPublicId: result.invitation.publicId, stateId: result.vendor.stateId, after: { vendorId: result.vendor.publicId, delivery: result.invitation.delivery } });
     sendCreated(res, result);
   };
 
