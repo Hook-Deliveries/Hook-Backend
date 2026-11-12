@@ -173,3 +173,18 @@ test('a provider outage fails closed with the documented error', async (t) => {
   modelReplies(t, [{ status: 500 }]);
   await assert.rejects(new AzureNegotiationService().phrase(counter, context()), (error: { code?: string; statusCode?: number }) => error.code === 'NEGOTIATION_UNAVAILABLE' && error.statusCode === 503);
 });
+
+test('fallback wording never says an offer is too low or that Hook cannot go lower', () => {
+  const cases = [
+    { decision: 'COUNTER' as const, finalized: true },
+    { decision: 'COUNTER' as const, finalized: false },
+    { decision: 'DECLINE' as const, finalized: true },
+    { decision: 'DECLINE' as const, finalized: false },
+  ];
+  for (const language of ['english', 'pidgin'] as const) {
+    for (const { decision, finalized } of cases) {
+      const message = fallbackPhrase({ decision }, { language, quoteMinutes: 30, remainingOffers: finalized ? 0 : 2, finalized, approvedPriceMinor: 4_500_000, quantity: 1 });
+      assert.doesNotMatch(message, /too low|can't go|cannot go|no fit go|go that low|go lower/i, message);
+    }
+  }
+});

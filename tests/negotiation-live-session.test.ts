@@ -115,7 +115,8 @@ test('a price drop mid-session is applied, stored and reported to the customer',
   await startedSession();
   const response: any = await new NegotiationService().offer(customer, 'neg_live_1', 4_000_000, 'offer-key-0003', '40k');
   assert.equal(response.decision, 'COUNTER');
-  assert.equal(response.counterPriceMinor, 4_266_667);
+  // This round's price is 42,667; Hook's counter adds a small varying cushion, in whole ₦100, and stays below the list price.
+  assert.ok(response.counterPriceMinor >= 4_266_667 && response.counterPriceMinor <= 4_450_000 && response.counterPriceMinor % 10_000 === 0, `counter ${response.counterPriceMinor}`);
   assert.deepEqual(response.priceChanged, { fromMinor: 5_000_000, toMinor: 4_500_000 });
   const saved = await Negotiation.findOne({ publicId: 'neg_live_1' }).lean();
   assert.equal(saved?.rulesSnapshot?.sellingPriceMinor, 4_500_000);

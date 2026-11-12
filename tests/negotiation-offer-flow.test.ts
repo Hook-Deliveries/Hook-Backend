@@ -165,13 +165,15 @@ test('an offer is made as a total and answered with totals', async () => {
   const outcome = await new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 8_800_000, 'offer-flow-0001');
   assert.equal(outcome.result.offerTotalMinor, 8_800_000);
   assert.equal(outcome.result.decision, 'COUNTER');
-  // Round 1 of 3 on a ₦6,000 range: Hook counters at ₦47,000 each = ₦94,000 for both.
-  assert.equal(outcome.result.counterTotalMinor, 9_400_000);
-  assert.equal(outcome.flow.counter?.totalMinor, 9_400_000);
+  // Round 1 of 3 on a ₦6,000 range: this round's price is ₦47,000 each (₦94,000 for both). Hook's counter adds a small
+  // varying cushion in whole ₦100 per item, and stays below the list price.
+  const counter = outcome.result.counterTotalMinor as number;
+  assert.ok(counter >= 9_400_000 && counter <= 9_700_000 && counter % 20_000 === 0, `counter ${counter}`);
+  assert.equal(outcome.flow.counter?.totalMinor, counter);
   assert.equal(outcome.flow.remainingOffers, 2);
   assert.equal(outcome.flow.history.length, 1);
-  assert.deepEqual({ offer: outcome.flow.history[0].offerTotalMinor, counter: outcome.flow.history[0].counterTotalMinor }, { offer: 8_800_000, counter: 9_400_000 });
-  assert.equal(outcome.flow.maxTotalMinor, 9_400_000, 'the next offer must be below Hook\'s counter');
+  assert.deepEqual({ offer: outcome.flow.history[0].offerTotalMinor, counter: outcome.flow.history[0].counterTotalMinor }, { offer: 8_800_000, counter });
+  assert.equal(outcome.flow.maxTotalMinor, counter, 'the next offer must be below Hook\'s counter');
 });
 
 test('an accepted offer is NOT locked while offers remain: the customer chooses', async () => {
@@ -298,7 +300,8 @@ test('an offer still works, with fixed wording, when the AI provider is down', a
   const outcome = await new NegotiationOfferFlowService().submitTotal(customer, 'neg_flow_1', 8_800_000, 'offer-flow-0009');
   assert.equal(outcome.result.decision, 'COUNTER');
   assert.equal(outcome.result.providerFallback, true);
-  assert.match(outcome.result.message || '', /₦94,000/);
+  const shown = `₦${((outcome.result.counterTotalMinor as number) / 100).toLocaleString('en-NG')}`;
+  assert.ok((outcome.result.message || '').includes(shown), `${outcome.result.message} should show ${shown}`);
 });
 
 test('an offer on a negotiation that already ended is refused', async () => {

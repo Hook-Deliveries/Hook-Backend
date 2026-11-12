@@ -134,6 +134,45 @@ async function notifyAccount(accountId: string, title: string, body: string, dat
 }
 
 export class MarketVendorService {
+  /**
+   * Per-Market numbers for a Market Associate's overview: suppliers, captured products, products waiting for an
+   * availability check, and the associate's own submissions by stage. Keyed by the Market's _id.
+   */
+  async marketOverviewStats(marketIds: string[], marketAssociateId: string) {
+    const empty = () => ({ vendors: 0, activeVendors: 0, products: 0, pendingAvailability: 0, submissions: { total: 0, inReview: 0, changesRequested: 0, approved: 0, drafts: 0 }, lastSubmissionAt: null as Date | null });
+    const stats = new Map(marketIds.map((id) => [id, empty()]));
+    if (!marketIds.length) return stats;
+    const notDeleted = { deletedAt: { $exists: false } };
+    const [vendors, products, submissions] = await Promise.all([
+      MarketVendor.aggregate([{ $match: { marketId: { $in: marketIds }, ...notDeleted } }, { $group: { _id: { market: '$marketId', status: '$status' }, count: { $sum: 1 } } }]),
+      Product.aggregate([{ $match: { marketId: { $in: marketIds }, ...notDeleted } }, { $group: { _id: { market: '$marketId', unconfirmed: { $eq: ['$availabilityStatus', 'unconfirmed'] } }, count: { $sum: 1 } } }]),
+      ProductSubmission.aggregate([{ $match: { marketId: { $in: marketIds }, marketAssociateId, ...notDeleted } }, { $group: { _id: { market: '$marketId', status: '$status' }, count: { $sum: 1 }, last: { $max: '$updatedAt' } } }]),
+    ]);
+    for (const row of vendors) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.vendors += row.count;
+      if (row._id.status === 'active') entry.activeVendors += row.count;
+    }
+    for (const row of products) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.products += row.count;
+      if (row._id.unconfirmed) entry.pendingAvailability += row.count;
+    }
+    for (const row of submissions) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.submissions.total += row.count;
+      if (['submitted', 'in_review'].includes(row._id.status)) entry.submissions.inReview += row.count;
+      if (row._id.status === 'changes_requested') entry.submissions.changesRequested += row.count;
+      if (row._id.status === 'approved') entry.submissions.approved += row.count;
+      if (row._id.status === 'draft') entry.submissions.drafts += row.count;
+      if (!entry.lastSubmissionAt || row.last > entry.lastSubmissionAt) entry.lastSubmissionAt = row.last;
+    }
+    return stats;
+  }
+
   async marketAssociateMarket(accountId: string, identifier: string) {
     const { market, marketAssociate } = await marketAssociateContext(accountId, identifier);
     const [vendors, assignments, submissions, products, collections] = await Promise.all([
@@ -210,62 +249,43 @@ export class MarketVendorService {
     }).lean();
     if (duplicate) throw new HttpError(409, 'This vendor is already tracked in this Market', undefined, 'MARKET_VENDOR_DUPLICATE');
 
-    const token = crypto.randomBytes(32).toString('base64url');
-    const invitationExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    const session = await mongoose.startSession();
+    // A supplier added by a Market Associate or staff is active straight away: there is no verification step and
+    // no invitation to accept, so products can be linked to them immediately.
     let vendor: any;
-    let invitation: any;
     try {
-      await session.withTransaction(async () => {
-        vendor = await MarketVendor.create([{
-          publicId: await nextPublicId('marketVendor'),
-          marketId: market._id.toString(),
-          stateId: market.stateId,
-          businessName: input.businessName.trim(),
-          contactName: input.contactName.trim(),
-          normalizedPhone,
-          phone: input.phone.trim(),
-          email: emailAddress,
-          address: input.address?.trim(),
-          preferredContactChannel: input.preferredContactChannel || 'phone',
-          paymentProfile: paymentProfile(input.paymentProfile),
-          status: 'pending',
-          invitedByMarketAssociateId: inviter.marketAssociateId,
-          notes: input.notes?.trim(),
-        } as any], { session });
-        invitation = await VendorInvitation.create([{
-          publicId: await nextPublicId('vendorInvitation'),
-          vendorId: vendor[0].id,
-          marketId: market._id.toString(),
-          invitedByMarketAssociateId: inviter.marketAssociateId,
-          invitedByAccountId: inviter.accountId,
-          email: emailAddress,
-          tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
-          status: 'pending',
-          expiresAt: invitationExpiresAt,
-        }], { session });
-      });
+      vendor = await MarketVendor.create({
+        publicId: await nextPublicId('marketVendor'),
+        marketId: market._id.toString(),
+        stateId: market.stateId,
+        businessName: input.businessName.trim(),
+        contactName: input.contactName.trim(),
+        normalizedPhone,
+        phone: input.phone.trim(),
+        email: emailAddress,
+        address: input.address?.trim(),
+        preferredContactChannel: input.preferredContactChannel || 'phone',
+        paymentProfile: paymentProfile(input.paymentProfile),
+        status: 'active',
+        invitedByMarketAssociateId: inviter.marketAssociateId,
+        notes: input.notes?.trim(),
+      } as any);
     } catch (error) {
       // Two simultaneous adds of the same vendor: the unique index decided, so answer as the pre-check does.
       if (isDuplicateKeyError(error)) throw new HttpError(409, 'This vendor is already tracked in this Market', undefined, 'MARKET_VENDOR_DUPLICATE');
       throw error;
-    } finally {
-      await session.endSession();
     }
 
-    const baseUrl = (await adminAppBaseUrl());
-    const inviteUrl = `${baseUrl}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
-    let delivery = { delivered: false, provider: 'share_link' };
+    // With an email on file the supplier is simply told they were added; nothing is asked of them.
+    let delivery = { delivered: false, provider: 'none' };
     if (emailAddress) {
       delivery = await email.send({
         to: emailAddress,
-        subject: `Hook is verifying your ${market.name} supplier profile`,
-        html: `<p>Hello ${input.contactName.trim()},</p><p>${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}.</p><p>Review and confirm your contact details here: <a href="${inviteUrl}">${inviteUrl}</a></p><p>This link expires in 7 days.</p>`,
-        text: `Review your Hook supplier profile for ${market.name}: ${inviteUrl}`,
-      });
-      await VendorInvitation.updateOne({ _id: invitation[0]._id }, { $set: { emailSentAt: new Date() } });
+        subject: `You are now a Hook supplier in ${market.name}`,
+        html: `<p>Hello ${input.contactName.trim()},</p><p>${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}. Your profile is active and there is nothing else you need to do.</p>`,
+        text: `${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}. Your profile is active and there is nothing else you need to do.`,
+      }).catch(() => ({ delivered: false, provider: 'none' }));
     }
-    return { vendor: safeVendor(vendor[0]), invitation: { publicId: invitation[0].publicId, status: invitation[0].status, expiresAt: invitationExpiresAt, inviteUrl, delivery } };
+    return { vendor: safeVendor(vendor), delivery };
   }
 
   async updateMarketAssociateVendor(accountId: string, identifier: string, input: any) {
