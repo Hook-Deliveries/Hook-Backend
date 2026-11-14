@@ -40,6 +40,7 @@
     "db:sync-market-associate-product-options": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/sync-market-associate-product-options.ts",
     "db:seed-legal-content": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-legal-content.ts",
     "db:backfill-product-ids": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-ids.ts",
+    "db:backfill-photo-order": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-photo-order.ts",
     "db:backfill-product-catalog": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-product-catalog-links.ts",
     "db:migrate-fulfilment-indexes": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-fulfilment-indexes.ts",
     "db:migrate-shipping-flow": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-shipping-flow.ts",

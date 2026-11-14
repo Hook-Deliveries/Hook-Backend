@@ -51,6 +51,19 @@ export class MarketAssociateCatalogController {
     sendSuccess(res, await presentSubmission(updated));
   };
 
+  remove = async (req: Request, res: Response) => {
+    const removed = await this.catalog.deleteDraft(req.user!.sub, routeParam(req.params.id));
+    await recordAudit(req, {
+      action: 'catalog.submission.deleted',
+      entityType: 'product_submission',
+      entityId: removed._id.toString(),
+      entityPublicId: removed.publicId,
+      stateId: removed.sourceStateId,
+      before: removed,
+    });
+    sendSuccess(res, { deleted: true });
+  };
+
   submit = async (req: Request, res: Response) => {
     const updated = await this.catalog.submit(req.user!.sub, routeParam(req.params.id), req.body.version);
     await recordAudit(req, {

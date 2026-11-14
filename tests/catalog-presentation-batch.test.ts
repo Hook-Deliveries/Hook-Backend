@@ -49,3 +49,34 @@ test('presentSubmissions matches presentSubmission run per row, for rows that sh
 test('presentSubmissions returns an empty list for an empty page without querying anything', async () => {
   assert.deepEqual(await presentSubmissions([]), []);
 });
+
+test('a submission keeps its photos in the order captured, with the front/side/back views and the confirmation', async () => {
+  const state = await OperationState.create({ publicId: 'STA-V1', name: 'Lagos', capitalName: 'Ikeja', code: 'LA', status: 'active', operationsEnabled: true } as never);
+  const market = await Market.create({ publicId: 'MAR-V1', name: 'Balogun', normalizedName: 'balogun', stateId: state.id, cityId: 'city', address: '1 Market Road', status: 'active' } as never);
+  const category = await Category.create({ publicId: 'CAT-V1', name: 'Sneakers', slug: 'sneakers-v1', level: 1, isActive: true } as never);
+  const account = await User.create({ publicId: 'MA-ACC-V1', accountType: 'marketassociate', accountStatus: 'active', email: 'views-ma@example.com', phone: '+2348000000002', firstName: 'Ada', lastName: 'Eze' } as never);
+  const associate = await MarketAssociateProfile.create({ publicId: 'MA-V1', accountId: account.id, stateIds: [state.id], hubIds: [], availability: 'available', status: 'active' } as never);
+  // Created back-first and all with the same `order`, so the database has no useful order to fall back on.
+  const media = [] as Array<{ publicId: string }>;
+  for (const name of ['back', 'extra', 'front', 'side']) {
+    media.push(await CatalogMediaAsset.create({
+      publicId: `MED-V-${name}`, provider: 'legacy_external', providerPublicId: `prov-${name}`, deliveryType: 'external', secureUrl: `https://images.example/${name}.jpg`, format: 'jpg',
+      width: 800, height: 800, bytes: 1000, uploaderAccountId: account.id, ownerType: 'submission', status: 'ready', order: 0, uploadIntentId: `intent-${name}`,
+    } as never));
+  }
+  const submission = await ProductSubmission.create({
+    publicId: 'SUB-V1', marketAssociateId: associate.id, marketId: market.id, sourceStateId: state.id, categorySuggestionId: category.id, basicTitle: 'Runner',
+    mediaIds: ['MED-V-front', 'MED-V-side', 'MED-V-back', 'MED-V-extra'], mediaViews: { front: 'MED-V-front', side: 'MED-V-side', back: 'MED-V-back' },
+    captureChecklistConfirmed: true, basePriceMinor: 10000, currency: 'NGN', variants: [], availabilityStatus: 'available', status: 'submitted', reviewNotes: [], version: 1,
+  } as never);
+
+  const row = await ProductSubmission.findOne({ publicId: submission.publicId }).lean({ virtuals: true });
+  const presented: any = await presentSubmission(row);
+  assert.deepEqual(presented.mediaIds, ['MED-V-front', 'MED-V-side', 'MED-V-back', 'MED-V-extra']);
+  assert.deepEqual(presented.media.map((item: { publicId: string }) => item.publicId), ['MED-V-front', 'MED-V-side', 'MED-V-back', 'MED-V-extra']);
+  assert.deepEqual(presented.mediaViews, { front: 'MED-V-front', side: 'MED-V-side', back: 'MED-V-back' });
+  assert.equal(presented.captureChecklistConfirmed, true);
+  assert.equal(presented.imageUrl, 'https://images.example/front.jpg', 'the front view is the primary image');
+  // The list presenter agrees.
+  assert.deepEqual((await presentSubmissions([row]))[0], presented);
+});
