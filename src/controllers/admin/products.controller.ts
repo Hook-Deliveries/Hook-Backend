@@ -20,6 +20,7 @@ import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cac
 import { publishRealtime } from '@modules/platform/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
+import { syncProductPhotoAssets } from '@modules/catalog/commercial-catalog.service';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -390,6 +391,10 @@ export class AdminProductsController {
         commercialApproval: { approved: true, approvedBy: req.user!.sub, approvedAt: now },
       });
     }
+    // The gallery decides what customers see and in what order, so the uploaded-photo list follows it.
+    if (Array.isArray(updates.images) && Array.isArray(product.mediaAssetIds) && product.mediaAssetIds.length) {
+      updates.mediaAssetIds = await syncProductPhotoAssets(product.mediaAssetIds, updates.images);
+    }
     updates.catalogVersion = Number(product.catalogVersion || 1) + 1;
     const priceFieldsChanged = (['costPrice', 'sellingPrice', 'discountedPrice', 'minAcceptablePrice'] as const)
       .some((key) => updates[key] !== undefined && Number(updates[key]) !== Number(product[key] ?? undefined));
@@ -468,9 +473,10 @@ export class AdminProductsController {
     if (cached) return cached;
     const products = adminRepos.products();
     const now = new Date();
-    const [total, approved, pendingApproval, needsRecheck, unavailable] = await Promise.all([
+    const [total, active, pendingApproval, needsRecheck, unavailable] = await Promise.all([
       products.count(),
-      products.count({ where: { status: ProductStatus.APPROVED } }),
+      // Live products are `published`; `approved` is the older word for the same thing.
+      products.model.countDocuments({ deletedAt: { $exists: false }, status: { $in: [ProductStatus.PUBLISHED, ProductStatus.APPROVED] } }),
       products.count({ where: { status: ProductStatus.PENDING_APPROVAL } }),
       products.model.countDocuments({ deletedAt: { $exists: false }, $or: [
         { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
@@ -478,6 +484,6 @@ export class AdminProductsController {
       ] }),
       products.model.countDocuments({ deletedAt: { $exists: false }, availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE }),
     ]);
-    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, needsRecheck, unavailable });
+    return adminProductStatsCache.set('summary', { total, active, approved: active, pendingApproval, needsRecheck, unavailable });
   }
 }

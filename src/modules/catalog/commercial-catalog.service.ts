@@ -306,6 +306,10 @@ export class CommercialCatalogService {
       // Moving a product into the new tree clears its "needs a sub-category" flag.
       (input as Record<string, unknown>).needsRecategorisation = false;
     }
+    // The gallery (`images`) is what customers see, so keep the product's uploaded-photo list in the same order.
+    if (Array.isArray(input.images) && !input.mediaAssetIds && Array.isArray(current.mediaAssetIds) && current.mediaAssetIds.length) {
+      input.mediaAssetIds = await syncProductPhotoAssets(current.mediaAssetIds, input.images as string[]);
+    }
     if (input.mediaAssetIds) {
       const assets = await CatalogMediaAsset.find({
         $or: [
@@ -671,6 +675,51 @@ function identifierFilter(ids: string[]) {
   };
 }
 
+/**
+ * Puts a product's uploaded-photo list in the same order as its gallery (`images`), writing each photo's place onto its
+ * record. A photo that is no longer in the gallery leaves the list; photos added by link stay in `images` only.
+ * Returns the new `mediaAssetIds`.
+ */
+export async function syncProductPhotoAssets(mediaAssetIds: string[], images: string[]): Promise<string[]> {
+  if (!mediaAssetIds?.length) return [];
+  const owned = await CatalogMediaAsset.find({
+    $or: [
+      { publicId: { $in: mediaAssetIds } },
+      { _id: { $in: mediaAssetIds.filter((id) => /^[a-f\d]{24}$/i.test(id)) } },
+    ],
+  }).lean({ virtuals: true });
+  const delivery = new CatalogMediaService();
+  const urlOf = (asset: any) => (asset.deliveryType === "external" ? asset.secureUrl : delivery.deliveryUrl(asset));
+  const ordered: any[] = [];
+  for (const url of images) {
+    const asset = owned.find((entry: any) => urlOf(entry) === url || entry.secureUrl === url);
+    if (asset && !ordered.includes(asset)) ordered.push(asset);
+  }
+  if (ordered.length) {
+    await CatalogMediaAsset.bulkWrite(ordered.map((asset: any, index: number) => ({
+      updateOne: { filter: { _id: asset._id }, update: { $set: { order: index } } },
+    })));
+  }
+  return ordered.map((asset: any) => String(asset.publicId || asset._id));
+}
+
+/**
+ * The photos a customer sees, in the order the product is meant to show them: `images` (the gallery the reviewer or
+ * an admin arranged, first = primary) decides the order, and each url borrows its size from the matching uploaded
+ * photo. Products with no `images` fall back to their uploaded photos in saved order. Every item carries `position`,
+ * so clients can sort by it instead of trusting array order.
+ */
+export function orderedProductMedia(product: any, assetMedia: any[]) {
+  const gallery = legacyMedia(product);
+  const base = gallery.length
+    ? gallery.map((item: any) => {
+        const match = assetMedia.find((asset: any) => asset.url === item.url);
+        return match ? { ...item, width: match.width ?? item.width, height: match.height ?? item.height } : item;
+      })
+    : assetMedia;
+  return base.map((item: any, index: number) => ({ ...item, position: index }));
+}
+
 function legacyMedia(product: any) {
   if (!Array.isArray(product.images)) return [];
   return product.images
@@ -807,9 +856,7 @@ export async function publicProductRepresentations(
     const category = categoryMap.get(String(product.categoryId));
     const market = marketMap.get(String(product.marketId));
     const state = stateMap.get(String(product.sourceStateId));
-    const productMedia = (
-      Array.isArray(product.mediaAssetIds) ? product.mediaAssetIds : []
-    )
+    const assetMedia = (Array.isArray(product.mediaAssetIds) ? product.mediaAssetIds : [])
       .map((mediaId: string) => mediaMap.get(String(mediaId)))
       .filter(Boolean)
       .map((asset: any) => ({
@@ -822,9 +869,7 @@ export async function publicProductRepresentations(
         height: asset.height,
         alt: product.title,
       }));
-    const mediaPresentation = productMedia.length
-      ? productMedia
-      : legacyMedia(product);
+    const mediaPresentation = orderedProductMedia(product, assetMedia);
     const effectivePriceMinor =
       Number(product.sellingPriceMinor || 0) -
       Number(product.discountMinor || 0);

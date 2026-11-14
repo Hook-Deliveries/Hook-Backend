@@ -168,6 +168,39 @@ function assertSubmissionPublishReady(product: Record<string, any>) {
   }
 }
 
+/**
+ * One order for a submission's photos: front, side, back, then any extras in the order they were added. `mediaIds`
+ * and `mediaViews` are stored together, so building both from the same rule means they can never disagree, whatever
+ * order a client happened to send.
+ */
+export function canonicalSubmissionMedia(mediaIds: string[], mediaViews: { front?: string; side?: string; back?: string } = {}) {
+  const views: { front?: string; side?: string; back?: string } = {};
+  const ordered: string[] = [];
+  for (const view of ['front', 'side', 'back'] as const) {
+    const id = mediaViews[view];
+    if (id && mediaIds.includes(id) && !ordered.includes(id)) {
+      views[view] = id;
+      ordered.push(id);
+    }
+  }
+  for (const id of mediaIds) if (!ordered.includes(id)) ordered.push(id);
+  return { mediaIds: ordered, mediaViews: views };
+}
+
+/**
+ * The product's photo list follows the gallery the reviewer finished with (first = primary). A photo the gallery does
+ * not place falls back to the order the Market Associate captured it in, after the placed ones.
+ */
+export function orderApprovedAssets(assets: any[], images: string[], capturedIds: string[], urlOf: (asset: any) => string | undefined) {
+  const position = (asset: any) => {
+    const inGallery = images.findIndex((url) => url === urlOf(asset) || url === asset.secureUrl);
+    if (inGallery >= 0) return inGallery;
+    const captured = capturedIds.findIndex((id) => id === asset.publicId || id === String(asset._id));
+    return images.length + (captured < 0 ? 999 : captured);
+  };
+  return [...assets].sort((a, b) => position(a) - position(b));
+}
+
 async function claimMedia(accountId: string, submissionId: string, mediaIds: string[]) {
   if (!mediaIds.length) return [];
   const assets = await CatalogMediaAsset.find({
@@ -181,10 +214,17 @@ async function claimMedia(accountId: string, submissionId: string, mediaIds: str
   if (assets.length !== new Set(mediaIds).size) {
     throw new HttpError(400, 'One or more images are invalid or belong to another record', undefined, 'SUBMISSION_VALIDATION_FAILED');
   }
-  await CatalogMediaAsset.updateMany(
-    { _id: { $in: assets.map((asset) => asset._id) }, $or: [{ ownerId: { $exists: false } }, { ownerId: submissionId }] },
-    { $set: { ownerType: 'submission', ownerId: submissionId } },
-  );
+  // Each photo records its place in the submission, so anything that sorts by `order` sees front, side, back, extras.
+  const position = (asset: any) => {
+    const index = mediaIds.findIndex((id) => id === asset.publicId || id === String(asset._id));
+    return index < 0 ? mediaIds.length : index;
+  };
+  await CatalogMediaAsset.bulkWrite(assets.map((asset: any) => ({
+    updateOne: {
+      filter: { _id: asset._id, $or: [{ ownerId: { $exists: false } }, { ownerId: submissionId }] },
+      update: { $set: { ownerType: 'submission', ownerId: submissionId, order: position(asset) } },
+    },
+  })));
   return assets;
 }
 
@@ -321,6 +361,7 @@ export class MarketAssociateCatalogService {
     ]);
     const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
     const publicId = await nextPublicId('submission');
+    const photos = canonicalSubmissionMedia(input.mediaIds, input.mediaViews);
     const submission = await ProductSubmission.create({
       publicId,
       marketAssociateId: marketAssociate._id.toString(),
@@ -330,8 +371,8 @@ export class MarketAssociateCatalogService {
       categorySuggestionId: (await category(input.categorySuggestionId))._id.toString(),
       basicTitle: input.basicTitle,
       notes: input.notes,
-      mediaIds: input.mediaIds,
-      mediaViews: input.mediaViews,
+      mediaIds: photos.mediaIds,
+      mediaViews: photos.mediaViews,
       captureChecklistConfirmed: input.captureChecklistConfirmed,
       basePriceMinor: input.basePriceMinor,
       currency: input.currency,
@@ -342,7 +383,7 @@ export class MarketAssociateCatalogService {
       status: ProductSubmissionStatus.DRAFT,
       version: 1,
     });
-    await claimMedia(accountId, submission.id, input.mediaIds);
+    await claimMedia(accountId, submission.id, photos.mediaIds);
     return submission.toJSON();
   }
 
@@ -357,6 +398,7 @@ export class MarketAssociateCatalogService {
       category(input.categorySuggestionId),
     ]);
     const vendor = await ensureMarketVendor(input.marketVendorId, market._id.toString());
+    const photos = canonicalSubmissionMedia(input.mediaIds, input.mediaViews);
     const updated = await ProductSubmission.findOneAndUpdate(
       { _id: current._id, version: current.version },
       {
@@ -367,8 +409,8 @@ export class MarketAssociateCatalogService {
           categorySuggestionId: (await category(input.categorySuggestionId))._id.toString(),
           basicTitle: input.basicTitle,
           notes: input.notes,
-          mediaIds: input.mediaIds,
-          mediaViews: input.mediaViews,
+          mediaIds: photos.mediaIds,
+          mediaViews: photos.mediaViews,
           captureChecklistConfirmed: input.captureChecklistConfirmed,
           basePriceMinor: input.basePriceMinor,
           currency: input.currency,
@@ -382,8 +424,22 @@ export class MarketAssociateCatalogService {
       { returnDocument: 'after' },
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This submission was updated elsewhere', undefined, 'STALE_VERSION');
-    await claimMedia(accountId, current._id.toString(), input.mediaIds);
+    await claimMedia(accountId, current._id.toString(), photos.mediaIds);
     return updated;
+  }
+
+  /** Drafts only: a capture that was never sent for review can be discarded by the associate who made it. */
+  async deleteDraft(accountId: string, identifier: string) {
+    const current = await this.detail(accountId, identifier);
+    if (current.status !== ProductSubmissionStatus.DRAFT) {
+      throw new HttpError(409, 'Only drafts can be deleted', undefined, 'SUBMISSION_STATE_CONFLICT');
+    }
+    const result = await ProductSubmission.updateOne(
+      { _id: current._id, status: ProductSubmissionStatus.DRAFT, deletedAt: { $exists: false } },
+      { $set: { deletedAt: new Date() }, $inc: { version: 1 } },
+    );
+    if (!result.modifiedCount) throw new HttpError(409, 'This submission was updated elsewhere', undefined, 'STALE_VERSION');
+    return current;
   }
 
   async submit(accountId: string, identifier: string, version: number) {
@@ -501,6 +557,10 @@ export class CatalogReviewService {
       pending: counts.submitted || 0,
       inReview: counts.in_review || 0,
       changesRequested: counts.changes_requested || 0,
+      approved: counts.approved || 0,
+      rejected: counts.rejected || 0,
+      // Everything a reviewer can open: drafts are still the Market Associate's own work and are not part of the queue.
+      total: (counts.submitted || 0) + (counts.in_review || 0) + (counts.changes_requested || 0) + (counts.approved || 0) + (counts.rejected || 0),
       approvedToday: summary?.approvedToday?.[0]?.count || 0,
       rejectedToday: summary?.rejectedToday?.[0]?.count || 0,
       averageReviewAgeHours: Number(((summary?.age?.[0]?.averageMs || 0) / 3_600_000).toFixed(1)),
@@ -519,6 +579,9 @@ export class CatalogReviewService {
       const allowed = Object.values(ProductSubmissionStatus) as string[];
       if (!allowed.includes(String(query.status))) throw new HttpError(400, 'Unknown status', undefined, 'VALIDATION_ERROR');
       filter.status = query.status;
+    } else {
+      // "All" means everything a reviewer can open, never an associate's unfinished drafts.
+      filter.status = { $ne: ProductSubmissionStatus.DRAFT };
     }
     // A State filter can only narrow what the caller may already see, never widen it.
     if (query.stateId) filter.sourceStateId = stateIds?.length ? { $in: stateIds.filter((id) => id === String(query.stateId)) } : query.stateId;
@@ -727,7 +790,8 @@ export class CatalogReviewService {
     const urlOf = (asset: any) => (asset.deliveryType === 'external' ? asset.secureUrl : mediaDelivery.deliveryUrl(asset));
     const matched = images.length ? submissionAssets.filter((asset: any) => images.includes(urlOf(asset)) || images.includes(asset.secureUrl)) : [];
     // If no upload can be matched to the gallery (links pasted by hand), keep them all rather than release good files.
-    const keptAssets = matched.length ? matched : submissionAssets;
+    const keptUnordered = matched.length ? matched : submissionAssets;
+    const keptAssets = orderApprovedAssets(keptUnordered, images, current.mediaIds || [], urlOf);
     const keptIds = keptAssets.map((asset: any) => asset.publicId || String(asset._id));
     const releasedIds = submissionAssets.filter((asset: any) => !keptAssets.includes(asset)).map((asset: any) => String(asset._id));
     const negotiationRules = defaultNegotiationRules({

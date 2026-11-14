@@ -254,6 +254,7 @@ export function createMarketAssociateRouter() {
     validateBody(marketAssociateSubmissionDraftSchema),
     asyncHandler(catalog.update),
   );
+  router.delete("/product-submissions/:id", asyncHandler(catalog.remove));
   router.post(
     "/product-submissions/:id/submit",
     validateBody(
