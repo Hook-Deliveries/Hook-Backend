@@ -386,7 +386,7 @@ export class VendorCatalogService {
       throw new HttpError(409, 'Only a live product can be marked in or out of stock', undefined, 'INVALID_STATE_TRANSITION');
     }
 
-    let set: Record<string, unknown> = {};
+    let set: Record<string, unknown>;
     let unset: Record<string, 1> = {};
     let needsConfirmation = false;
     if (wantsOut) {

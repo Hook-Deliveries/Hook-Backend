@@ -2,7 +2,7 @@ import { AccountStatus, AccountType, ScopeType, UserRole } from '@lib/constants'
 import { hashPassword } from '@lib/security';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { User } from '@models/users/user.model';
-import { revokeAccountSessions } from '@modules/identity/account-session.service';
+import { revokeAccountSessions } from '@modules/identity';
 import { nextPublicId } from '@modules/platform';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
 

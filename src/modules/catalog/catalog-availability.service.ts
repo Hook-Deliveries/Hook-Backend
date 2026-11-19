@@ -5,6 +5,7 @@ import { Product } from '@models/products/product.model';
 import { MarketAssociateMarketAssignment, MarketAssociateProfile } from '@models/platform/operations-accounts.model';
 import { byProductIdentifier } from '@modules/catalog/catalog.service';
 import { MarketVendorService } from '@modules/catalog/market-vendor.service';
+import { notifyVendorProductLiveInBackground } from '@modules/notifications';
 import { publishRealtime } from '@modules/platform';
 import { HttpError } from '@utils/http';
 import { reconcileProductInBackground } from '@modules/negotiation/public';
@@ -99,6 +100,10 @@ export class CatalogAvailabilityService {
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This Product was updated elsewhere', undefined, 'STALE_VERSION');
     publishUpdate(updated);
+    // A product that was live, left sale for a recheck and passed it is back on sale: the vendor who owns it is told.
+    if (updated.status === ProductStatus.PUBLISHED && product.availabilityPreviousStatus === ProductStatus.PUBLISHED) {
+      notifyVendorProductLiveInBackground(updated.publicId || updated._id?.toString(), 'back_on_sale');
+    }
     return updated;
   }
 
