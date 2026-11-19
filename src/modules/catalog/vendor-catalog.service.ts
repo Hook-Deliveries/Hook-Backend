@@ -3,8 +3,9 @@ import { CatalogMediaAsset, ProductSubmission, type SubmissionVariant } from '@m
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
 import { Market } from '@models/platform/network.model';
+import { Category } from '@models/categories/category.model';
 import { User } from '@models/users/user.model';
-import { adminReviewCache } from '@lib/ttl-cache';
+import { adminProductStatsCache, adminReviewCache } from '@lib/ttl-cache';
 import { comparePassword } from '@lib/security';
 import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { createCommerceNotification } from '@modules/notifications';
@@ -20,7 +21,8 @@ import {
   type SubmissionInput,
 } from '@modules/catalog/catalog.service';
 import { notifyStaffByPermission } from '@modules/notifications';
-import { nextPublicId } from '@modules/platform';
+import { reconcileProductInBackground } from '@modules/negotiation/public';
+import { nextPublicId, publishRealtime } from '@modules/platform';
 import { HttpError } from '@utils/http';
 
 const EDITABLE = [ProductSubmissionStatus.DRAFT, ProductSubmissionStatus.CHANGES_REQUESTED];
@@ -232,7 +234,16 @@ export class VendorCatalogService {
     }).lean({ virtuals: true });
     const mediaService = new CatalogMediaService();
     const product: any = submission.productId ? await Product.findById(submission.productId).select('publicId status availabilityStatus').lean({ virtuals: true }) : null;
+    // A submission keeps its market and category by internal id, but the form lists and matches them by public id. Without
+    // translating, the product page shows "—" for both and an edited draft opens with no category chosen.
+    const isId = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+    const [market, categoryRecord]: any[] = await Promise.all([
+      isId(submission.marketId) ? Market.findById(submission.marketId).select('publicId').lean({ virtuals: true }) : null,
+      isId(submission.categorySuggestionId) ? Category.findById(submission.categorySuggestionId).select('publicId').lean({ virtuals: true }) : null,
+    ]);
     return present(submission, {
+      marketId: market?.publicId || submission.marketId,
+      categorySuggestionId: categoryRecord?.publicId || submission.categorySuggestionId,
       media: media.map((asset: any) => ({ ...asset, deliveryUrl: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset) })),
       product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus } : null,
     });
@@ -350,7 +361,14 @@ export class VendorCatalogService {
     return updated;
   }
 
-  /** Quick availability switch for a live product, so a vendor can mark an item out of stock without a review. */
+  /**
+   * Quick availability switch for a live product, so a vendor can mark an item out of stock without a review.
+   *
+   * Out of stock takes the product off sale at once (customers no longer see it anywhere), tells every open app and admin
+   * screen, and flags it for Hook to recheck on the market. Back in stock puts it straight back on sale while the market
+   * confirmation it had is still valid; once that has run out it waits, hidden, for a recheck instead of going live on the
+   * vendor's word alone.
+   */
   async setAvailability(accountId: string, productIdentifier: string, availability: ProductAvailabilityStatus) {
     const vendor = await vendorFor(accountId);
     const product: any = await Product.findOne({
@@ -359,10 +377,86 @@ export class VendorCatalogService {
       deletedAt: { $exists: false },
     });
     if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
-    product.availabilityStatus = availability;
-    if (availability === ProductAvailabilityStatus.UNAVAILABLE && product.status === ProductStatus.PUBLISHED) product.status = ProductStatus.SOLD_OUT;
-    else if (availability === ProductAvailabilityStatus.AVAILABLE && product.status === ProductStatus.SOLD_OUT) product.status = ProductStatus.PUBLISHED;
-    await product.save();
-    return { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus };
+
+    const now = new Date();
+    const wantsOut = availability === ProductAvailabilityStatus.UNAVAILABLE;
+    const isOut = product.status === ProductStatus.SOLD_OUT;
+    // Only live products (or ones already waiting on a recheck) can change; a draft or paused product is not on sale either way.
+    if (![ProductStatus.PUBLISHED, ProductStatus.SOLD_OUT, ProductStatus.AVAILABILITY_UNCONFIRMED].includes(product.status)) {
+      throw new HttpError(409, 'Only a live product can be marked in or out of stock', undefined, 'INVALID_STATE_TRANSITION');
+    }
+
+    let set: Record<string, unknown> = {};
+    let unset: Record<string, 1> = {};
+    let needsConfirmation = false;
+    if (wantsOut) {
+      if (isOut) return this.availabilityResult(product, false);
+      set = {
+        status: ProductStatus.SOLD_OUT,
+        availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE,
+        availabilityCheckRequestedAt: now,
+        availabilityCheckRequestedBy: accountId,
+        availabilityCheckNote: 'Marked out of stock by the vendor. Confirm on the market before it goes back on sale.',
+        customerAvailabilityNote: 'Currently out of stock.',
+      };
+    } else {
+      if (product.status === ProductStatus.PUBLISHED && product.availabilityStatus !== ProductAvailabilityStatus.UNAVAILABLE) return this.availabilityResult(product, false);
+      const stillConfirmed = product.availabilityValidUntil && new Date(product.availabilityValidUntil).getTime() > now.getTime();
+      if (stillConfirmed) {
+        set = { status: ProductStatus.PUBLISHED, availabilityStatus: ProductAvailabilityStatus.AVAILABLE, customerAvailabilityNote: 'Available from a verified Hook Market.' };
+        unset = { availabilityCheckRequestedAt: 1, availabilityCheckRequestedBy: 1, availabilityCheckNote: 1, availabilityCheckDueAt: 1 };
+      } else {
+        // Its market confirmation ran out while it was away, so a Market Associate has to confirm it before customers see it.
+        needsConfirmation = true;
+        set = {
+          status: ProductStatus.AVAILABILITY_UNCONFIRMED,
+          availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED,
+          availabilityPreviousStatus: ProductStatus.PUBLISHED,
+          availabilityCheckRequestedAt: now,
+          availabilityCheckRequestedBy: accountId,
+          availabilityCheckNote: 'The vendor says this is back in stock. Confirm on the market before it goes back on sale.',
+          customerAvailabilityNote: 'Temporarily unavailable while availability is being confirmed.',
+        };
+      }
+    }
+
+    const updated: any = await Product.findOneAndUpdate(
+      { _id: product._id, status: product.status },
+      { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}), $inc: { catalogVersion: 1 } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product changed a moment ago. Refresh and try again.', undefined, 'STALE_VERSION');
+
+    // Everything that shows this product refreshes now: the customer app's lists, home and product page, and the admin screens.
+    const event = { entityId: updated.publicId, version: Number(updated.catalogVersion || 1), scope: updated.sourceStateId ? { stateId: String(updated.sourceStateId) } : undefined };
+    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+    // A product that left sale takes its negotiations and locked prices with it, and customers' carts are re-checked.
+    reconcileProductInBackground(updated._id?.toString());
+    adminProductStatsCache.clear();
+
+    if (wantsOut || needsConfirmation) {
+      await notifyStaffByPermission({
+        permission: 'catalog.availability.manage',
+        stateId: updated.sourceStateId,
+        eventKeyPrefix: `product:${updated.publicId}:vendor-stock:${now.getTime()}`,
+        title: wantsOut ? 'Product marked out of stock' : 'Product back in stock, needs a recheck',
+        body: `${updated.title || 'A product'} from ${vendor.businessName || 'a vendor'} ${wantsOut ? 'was marked out of stock' : 'was marked back in stock'}. Recheck it on the market.`,
+        type: 'order_updated',
+        data: { productId: updated.publicId, href: `/dashboard/products/${updated.publicId}` },
+      }).catch((error) => console.warn('[vendor] stock notification failed', error instanceof Error ? error.message : error));
+    }
+    return this.availabilityResult(updated, needsConfirmation);
+  }
+
+  private availabilityResult(product: any, needsConfirmation: boolean) {
+    return {
+      publicId: product.publicId,
+      status: product.status,
+      availabilityStatus: product.availabilityStatus,
+      outOfStock: product.status === ProductStatus.SOLD_OUT,
+      needsConfirmation,
+    };
   }
 }

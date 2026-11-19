@@ -176,6 +176,8 @@ export class AdminProductsController {
     if (req.query.availability === 'recheck') {
       where.$and = [...(where.$and || []), { $or: [
         { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        // A vendor marked it out of stock: Hook still has to look at it on the market.
+        { status: ProductStatus.SOLD_OUT },
         { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
       ] }];
     }
@@ -482,6 +484,7 @@ export class AdminProductsController {
       products.count({ where: { status: ProductStatus.PENDING_APPROVAL } }),
       products.model.countDocuments({ deletedAt: { $exists: false }, $or: [
         { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.SOLD_OUT },
         { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
       ] }),
       products.model.countDocuments({ deletedAt: { $exists: false }, availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE }),
