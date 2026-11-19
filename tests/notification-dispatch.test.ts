@@ -19,7 +19,11 @@ beforeEach(async () => { await resetDatabase(); });
 // 12:00 in Lagos (UTC+1) and 23:00 in Lagos.
 const NOON = new Date('2026-02-10T11:00:00Z');
 const NIGHT = new Date('2026-02-10T22:00:00Z');
-const user = () => User.collection.insertOne({ _id: new mongoose.Types.ObjectId(), firstName: 'Ada', createdAt: new Date(), updatedAt: new Date() } as any).then((result) => String(result.insertedId));
+// Raw inserts skip the schema, but the unique email index still applies, so each user needs its own address.
+const user = () => {
+  const _id = new mongoose.Types.ObjectId();
+  return User.collection.insertOne({ _id, firstName: 'Ada', email: `${_id}@example.com`, createdAt: new Date(), updatedAt: new Date() } as any).then((result) => String(result.insertedId));
+};
 
 test('quiet hours run 9pm to 8am Lagos time, across midnight', () => {
   const quiet = DEFAULT_PREFERENCES.quietHours;
