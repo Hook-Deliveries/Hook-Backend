@@ -34,7 +34,8 @@ test('a tapped notification opens the product on the web', () => {
 
 async function shopper(kind: 'phone' | 'browser' | 'staff') {
   const _id = new mongoose.Types.ObjectId();
-  await User.collection.insertOne({ _id, firstName: 'Ada', accountType: kind === 'staff' ? 'staff' : 'customer', createdAt: new Date(), updatedAt: new Date() } as any);
+  // Raw inserts skip the schema, but the unique email index still applies, so each user needs its own address.
+  await User.collection.insertOne({ _id, firstName: 'Ada', email: `${_id}@example.com`, accountType: kind === 'staff' ? 'staff' : 'customer', createdAt: new Date(), updatedAt: new Date() } as any);
   const userId = String(_id);
   if (kind === 'phone') await DeviceToken.create({ userId, expoPushToken: `ExponentPushToken[${userId}]`, platform: 'ios', isActive: true } as any);
   else await WebPushSubscription.create({ userId, endpoint: `https://push.example/${userId}`, p256dh: 'p', auth: 'a', isActive: true });
