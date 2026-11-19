@@ -40,6 +40,8 @@ export function createPublicRouter() {
   router.get('/public/waitlist/unsubscribe/:token', asyncHandler(controller.unsubscribeWaitlist));
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
   router.get('/public/credit-config', asyncHandler(controller.creditConfig));
+  // The public half of the server's Web Push key, so browsers subscribe with the key that matches what the API signs with.
+  router.get('/public/web-push-key', (_req, res) => res.json({ success: true, data: { publicKey: process.env.VAPID_PUBLIC_KEY || null } }));
   router.get('/public/support', asyncHandler(controller.support));
   router.get('/public/faqs', asyncHandler(controller.faqs));
   router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(fulfilment.publicParcelTracking));

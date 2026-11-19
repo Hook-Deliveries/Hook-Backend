@@ -17,7 +17,7 @@ import { createDeviceRouter } from './routes/devices';
 import { createPublicRouter } from './routes/public';
 import { createUploadRouter } from './routes/upload';
 import { createWebhookRouter } from './routes/webhooks';
-import { createPartnerRouter, createMarketAssociateRouter } from './routes/platform-self';
+import { createPartnerRouter, createMarketAssociateRouter, createVendorRouter } from './routes/platform-self';
 import { createPublicGeographyRouter } from './routes/public-geography';
 import { createCatalogMediaRouter } from './routes/catalog-media';
 import { errorHandler, requestContext, sendError, sendSuccess } from './utils/http';
@@ -176,6 +176,7 @@ export function createApp() {
   app.use(`${apiPrefix}/admin`, createAdminRouter());
   app.use(`${apiPrefix}/market-associate`, createMarketAssociateRouter());
   app.use(`${apiPrefix}/partner`, createPartnerRouter());
+  app.use(`${apiPrefix}/vendor`, createVendorRouter());
   app.use(`${apiPrefix}/catalog/media`, uploadLimiter, createCatalogMediaRouter());
   // Public reads are revalidated on every request (cheap 304s via ETag), so an admin change reaches the app the moment
   // the realtime refresh fires instead of waiting out a stale copy.

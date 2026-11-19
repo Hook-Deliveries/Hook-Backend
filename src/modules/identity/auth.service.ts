@@ -11,6 +11,7 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
+import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { NotificationService } from '@modules/notifications';
 import { HttpError } from '@utils/http';
 import { verifyGoogleIdToken } from '@modules/identity/google-auth.service';
@@ -109,11 +110,28 @@ export class AuthService {
         publicId: true,
         accountType: true,
         accountStatus: true,
+        mustChangePassword: true,
+        failedLoginAttempts: true,
+        lockedUntil: true,
       },
     });
 
+    // Vendors start on a shared default password, so repeated guesses lock the account for a while.
+    const lockable = user?.accountType === AccountType.VENDOR;
+    if (lockable && user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+      throw new HttpError(429, 'Too many failed attempts. Try again in a few minutes.', undefined, 'ACCOUNT_LOCKED');
+    }
     if (!user?.password || !(await comparePassword(password, user.password))) {
+      if (user && lockable) {
+        const attempts = (user.failedLoginAttempts || 0) + 1;
+        await this.userRepo.update(user.id, attempts >= 5
+          ? { failedLoginAttempts: 0, lockedUntil: new Date(Date.now() + 15 * 60 * 1000) }
+          : { failedLoginAttempts: attempts });
+      }
       throw new HttpError(401, 'Invalid email or password');
+    }
+    if (lockable && (user.failedLoginAttempts || user.lockedUntil)) {
+      await this.userRepo.update(user.id, { failedLoginAttempts: 0, lockedUntil: undefined });
     }
 
     const isCustomerAccount = user.accountType
@@ -500,12 +518,24 @@ export class AuthService {
     const otp = await this.findValidOtp(email, code, 'password_reset');
     const user = await this.userRepo.findOne({ where: { email } });
     if (!user) throw new HttpError(404, 'User not found');
+    // A suspended or blocked vendor must not be able to switch their own account back on by resetting a password.
+    if (user.accountType === AccountType.VENDOR) {
+      const vendor = await MarketVendor.findOne({ accountId: user.id, deletedAt: { $exists: false } }).select('status').lean();
+      if (!vendor || vendor.status !== 'active') {
+        throw new HttpError(403, 'This vendor account is not active. Contact Hook support.', undefined, 'ACCESS_DENIED');
+      }
+    }
 
     user.password = await hashPassword(password);
     user.refreshToken = undefined;
     user.accountStatus = AccountStatus.ACTIVE;
     user.isActive = true;
     user.isEmailVerified = true;
+    // Choosing a new password through the emailed code replaces the default one, so no forced change and no lockout remain.
+    user.passwordChangedAt = new Date();
+    user.mustChangePassword = false;
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = undefined;
     await Promise.all([
       this.markOtpUsed(otp.id),
       this.userRepo.save(user),
@@ -540,6 +570,8 @@ export class AuthService {
     await this.userRepo.update(userId, {
       password: await hashPassword(newPassword),
       refreshToken: undefined,
+      passwordChangedAt: new Date(),
+      mustChangePassword: false,
     });
     return { message: 'Password changed successfully.' };
   }
