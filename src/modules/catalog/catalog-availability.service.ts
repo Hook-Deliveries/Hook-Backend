@@ -70,6 +70,7 @@ export class CatalogAvailabilityService {
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This Product was updated elsewhere', undefined, 'STALE_VERSION');
     await new MarketVendorService().notifyAvailability(actorId, updated);
+    notifyVendorProductLiveInBackground(updated.publicId || updated._id?.toString(), 'confirm_availability');
     publishUpdate(updated);
     return updated;
   }
@@ -191,6 +192,8 @@ export async function escalateOverdueAvailabilityChecks() {
     ).lean({ virtuals: true });
     if (!updated) continue;
     await notifier.notifyAvailability('system', updated);
+    // The vendor who owns it is asked too: they know best whether it is still available, and can bring it back on sale.
+    notifyVendorProductLiveInBackground(updated.publicId || updated._id?.toString(), 'confirm_availability');
     publishUpdate(updated);
   }
   const products = await Product.find({

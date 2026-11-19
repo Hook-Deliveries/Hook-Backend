@@ -476,6 +476,9 @@ export function createVendorRouter() {
     publishRealtime({ type: "admin.dashboard.updated", entityId: updated.publicId }, { admin: true });
     sendSuccess(res, { publicId: updated.publicId, status: updated.status, version: updated.version });
   }));
+  router.post("/products/:id/confirm-availability", asyncHandler(async (req, res) => {
+    sendSuccess(res, await catalog.confirmAvailability(req.user!.sub, routeParam(req.params.id)));
+  }));
   router.patch("/products/:id/availability", validateBody(z.object({ availabilityStatus: z.enum([ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.UNAVAILABLE]) }).strict()), asyncHandler(async (req, res) => {
     sendSuccess(res, await catalog.setAvailability(req.user!.sub, routeParam(req.params.id), req.body.availabilityStatus));
   }));
