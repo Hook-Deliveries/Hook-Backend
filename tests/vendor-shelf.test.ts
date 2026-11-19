@@ -104,3 +104,31 @@ test('the vendor is asked to confirm when the window runs out, once, and not for
   assert.equal(await notifyVendorProductLive('PRD-LIVE', 'confirm_availability'), false, 'a product still on sale is not asked about');
   assert.equal(await Notification.countDocuments({ userId: accountId }), 1);
 });
+
+test('a product Hook created directly for a vendor shows on their shelf, read-only, with its stock controls', async () => {
+  const { record, accountId } = await vendor('Femi');
+  const other = await vendor('Gloria');
+  const vendorId = String(record._id);
+  await product('PRD-DIRECT', vendorId, { status: 'published', availabilityStatus: 'available', images: ['https://cdn.example/a.jpg'], colors: ['Black'], sizes: ['42', '43'], costPrice: 30000, basePriceMinor: 3_000_000, currency: 'NGN' });
+  await product('PRD-DRAFT-DIRECT', vendorId, { status: 'draft', availabilityStatus: 'unconfirmed' });
+  await product('PRD-OTHER', String(other.record._id), { status: 'published', availabilityStatus: 'available' });
+
+  const service = new VendorCatalogService();
+  const rows = (await service.list(accountId, {})).data as any[];
+  assert.deepEqual(rows.map((row) => row.publicId), ['PRD-DIRECT'], 'only the vendor\'s own published product, not a draft or someone else\'s');
+  assert.equal(rows[0].status, 'approved');
+  assert.equal(rows[0].createdBy, 'market_associate');
+  assert.equal(rows[0].product.status, 'published');
+  assert.equal(rows[0].imageUrl, 'https://cdn.example/a.jpg');
+
+  const detail: any = await service.detail(accountId, 'PRD-DIRECT');
+  assert.equal(detail.basicTitle, 'Item PRD-DIRECT');
+  assert.equal(detail.variants.length, 2);
+  assert.equal(detail.media[0].deliveryUrl, 'https://cdn.example/a.jpg');
+  await assert.rejects(() => service.detail(accountId, 'PRD-OTHER'), /not found/i);
+  await assert.rejects(() => service.detail(accountId, 'PRD-DRAFT-DIRECT'), /not found/i);
+
+  // The same stock controls work on it.
+  const out = await service.setAvailability(accountId, 'PRD-DIRECT', 'unavailable' as any);
+  assert.equal(out.outOfStock, true);
+});

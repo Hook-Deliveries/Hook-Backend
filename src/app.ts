@@ -9,7 +9,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import swaggerUi from 'swagger-ui-express';
 import { apiDocsEnabled, parseOrigins } from '@config/env';
-import { authLimiter, generalLimiter, sanitizeRequest, uploadLimiter } from '@middleware/security';
+import { generalLimiter, sanitizeRequest, uploadLimiter } from '@middleware/security';
 import { createAdminRouter } from './routes/admin';
 import { createAuthRouter } from './routes/auth';
 import { createCustomerRouter } from './routes/customer';
@@ -171,7 +171,8 @@ export function createApp() {
     },
   }));
 
-  app.use(`${apiPrefix}/auth`, authLimiter, createAuthRouter());
+  // The auth router applies its own limits per route: strict where a password or code can be guessed, generous for session calls.
+  app.use(`${apiPrefix}/auth`, createAuthRouter());
   app.use(`${apiPrefix}/devices`, createDeviceRouter());
   app.use(`${apiPrefix}/admin`, createAdminRouter());
   app.use(`${apiPrefix}/market-associate`, createMarketAssociateRouter());

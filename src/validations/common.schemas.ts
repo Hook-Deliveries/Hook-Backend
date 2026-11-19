@@ -197,6 +197,8 @@ export const adminVendorUpdateSchema = adminVendorCreateSchema.omit({
 
 export const adminProductCreateSchema = productBaseSchema.extend({
   status: z.enum([ProductStatus.DRAFT, ProductStatus.PUBLISHED]).default(ProductStatus.DRAFT),
+  // The market vendor that owns the product. Empty or left out means Hook sourced it itself.
+  sourceMarketVendorId: z.string().trim().max(80).optional(),
 }).superRefine(validateNegotiationFloor);
 
 export const adminProductUpdateSchema = productBaseSchema.extend({
