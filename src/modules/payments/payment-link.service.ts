@@ -20,15 +20,36 @@ function hash(value: string) {
 }
 
 export function paymentOrigin() {
-  const configured = String(process.env.PAYMENT_WEB_ORIGIN || process.env.PUBLIC_WEB_URL || "https://app.hook.africa").replace(/\/$/, "");
-  if (process.env.NODE_ENV === "production" && !configured.startsWith("https://")) {
+  const configured = String(process.env.PAYMENT_WEB_ORIGIN || "https://shop.hook.africa").replace(/\/$/, "");
+  // Hosted payments must be https in production; a page on this same machine (local testing against the Docker stack) is the one exception.
+  const onThisMachine = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(configured);
+  if (process.env.NODE_ENV === "production" && !configured.startsWith("https://") && !onThisMachine) {
     throw new HttpError(503, "Hosted payments are not configured", undefined, "PAYMENT_CONFIGURATION_ERROR");
   }
   return configured;
 }
 
+/**
+ * A return address is only kept if it belongs to one of the sites allowed to call this API (CORS_ORIGINS, plus
+ * SHOP_ORIGINS if set), so a payment link can never be made to send a shopper to someone else's page.
+ */
+export function safeReturnUrl(value?: string) {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && !/^(localhost|127\.0\.0\.1)$/.test(url.hostname)) return undefined;
+    const allowed = [process.env.CORS_ORIGINS, process.env.SHOP_ORIGINS]
+      .flatMap((list) => String(list || "").split(","))
+      .map((origin) => origin.trim().replace(/\/$/, ""))
+      .filter(Boolean);
+    return allowed.includes(url.origin) ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class PaymentLinkService {
-  async create(customerId: string, orderIdentifier: string, fulfilmentGroupId?: string) {
+  async create(customerId: string, orderIdentifier: string, fulfilmentGroupId?: string, returnUrl?: string) {
     const order = await Order.findOne({
       ...(isValidObjectId(orderIdentifier) ? { $or: [{ _id: orderIdentifier }, { publicId: orderIdentifier }] } : { publicId: orderIdentifier }),
       userId: customerId,
@@ -66,6 +87,7 @@ export class PaymentLinkService {
       status: "active",
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       createdBy: customerId,
+      returnUrl: safeReturnUrl(returnUrl),
     });
     const url = `${paymentOrigin()}/payment/${token}`;
     // Fire-and-forget: the customer must still get their link back even if the mail fails.
@@ -238,6 +260,7 @@ export class PaymentLinkService {
       },
       providers,
       paidAt: payment.paidAt,
+      returnUrl: link.returnUrl,
     };
   }
 

@@ -27,7 +27,7 @@ import { HttpError } from '@utils/http';
 import { categoryService } from '@modules/catalog/category.service';
 import { adminReviewCache } from '@lib/ttl-cache';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
-import { notifyStaffByPermission } from '@modules/notifications';
+import { announceNewProductInBackground, notifyStaffByPermission } from '@modules/notifications';
 
 type SubmissionInput = {
   marketId: string;
@@ -496,9 +496,10 @@ export class MarketAssociateCatalogService {
 export class CatalogReviewService {
   private readonly email = new EmailService();
 
-  private async notifySubmissionDecision(submissionId: string, marketAssociateId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string) {
-    if (!marketAssociateId) return;
-    const marketAssociate = await MarketAssociateProfile.findById(marketAssociateId).select('accountId').lean() as any;
+  private async notifySubmissionDecision(submissionId: string, marketAssociateId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string, marketVendorId?: string) {
+    // Products a vendor captured themselves tell the vendor; ones an associate captured tell the associate.
+    let marketAssociate: any = marketAssociateId ? await MarketAssociateProfile.findById(marketAssociateId).select('accountId').lean() : null;
+    if (!marketAssociate && marketVendorId) marketAssociate = await MarketVendor.findById(marketVendorId).select('accountId').lean();
     if (!marketAssociate?.accountId) return;
     await createCommerceNotification({
       // Each review round is its own event, so a second "changes requested" still notifies.
@@ -727,7 +728,7 @@ export class CatalogReviewService {
       if (action === 'rejected' && current.mediaIds?.length) {
         await CatalogMediaAsset.updateMany({ $or: [{ publicId: { $in: current.mediaIds } }, { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }] }, { $set: { status: 'removed' } });
       }
-      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, action, input.reason);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, action, input.reason, current.marketVendorId);
       return updated;
     }
 
@@ -802,8 +803,10 @@ export class CatalogReviewService {
     const transaction = await mongoose.startSession();
     try {
       let result: any;
+      let publishedProductId: string | undefined;
       await transaction.withTransaction(async () => {
         const productPublicId = await nextPublicId('product');
+        publishedProductId = productPublicId;
         const slug = `${slugify(approveInput.title || current.basicTitle)}-${productPublicId.toLowerCase()}`;
         const now = new Date();
         const product = await Product.create([{
@@ -842,7 +845,7 @@ export class CatalogReviewService {
           lastMarketVerifiedAt: verifiedAt,
           negotiationRules,
           commercialApproval: { approved: isPublished, approvedBy: isPublished ? actorId : undefined, approvedAt: isPublished ? now : undefined, sourceMarketAssociateId: current.marketAssociateId },
-          source: 'admin',
+          source: current.marketAssociateId ? 'admin' : 'vendor',
           viewCount: 0,
           orderCount: 0,
           averageRating: 0,
@@ -899,10 +902,14 @@ export class CatalogReviewService {
         );
         if (releasedIds.length) await CatalogMediaAsset.updateMany({ _id: { $in: releasedIds } }, { $set: { status: 'removed' } }, { session: transaction });
       });
-      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason, current.marketVendorId);
+      if (isPublished && publishedProductId) announceNewProductInBackground(publishedProductId);
       return result;
     } finally {
       await transaction.endSession();
     }
   }
 }
+
+/** Shared with the vendor self-service catalog service. */
+export { claimMedia, validateSubmissionReady, category as assignableCategory, identifierQuery, sellerReferenceFor, type SubmissionInput };

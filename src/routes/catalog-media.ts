@@ -9,7 +9,7 @@ import { asyncHandler } from '@utils/http';
 export function createCatalogMediaRouter() {
   const router = Router();
   const controller = new CatalogMediaController();
-  router.use(requireAuth, requireAccountType(AccountType.MARKETASSOCIATE, AccountType.STAFF));
+  router.use(requireAuth, requireAccountType(AccountType.MARKETASSOCIATE, AccountType.STAFF, AccountType.VENDOR));
   router.get('/readiness', asyncHandler(controller.readiness));
   router.post('/upload-intents', validateBody(uploadIntentSchema), asyncHandler(controller.intent));
   router.post('/finalize', validateBody(uploadFinalizeSchema), asyncHandler(controller.finalize));

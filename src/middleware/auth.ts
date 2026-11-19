@@ -145,3 +145,19 @@ export function requireAccountType(...types: AccountType[]) {
     next();
   };
 }
+
+/**
+ * Accounts created with a default password (vendors) may only reach the change-password and profile routes until
+ * they choose their own. Mount it on a router after requireAuth; /auth/* routes are not behind it.
+ */
+export async function requirePasswordChanged(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.user?.sub).select('mustChangePassword').lean();
+    if (user?.mustChangePassword) {
+      return next(new HttpError(403, 'Change your password to continue', undefined, 'PASSWORD_CHANGE_REQUIRED'));
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+}

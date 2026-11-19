@@ -1,3 +1,4 @@
+import { announceNewProductInBackground } from "@modules/notifications";
 import { ProductAvailabilityStatus, ProductStatus } from "@lib/constants";
 import { reconcileProductInBackground } from "@modules/negotiation/public";
 import { categoryService } from "@modules/catalog/category.service";
@@ -631,6 +632,7 @@ export class CommercialCatalogService {
         "STALE_VERSION",
       );
     this.publishCatalogUpdate(updated);
+    if (nextStatus === ProductStatus.PUBLISHED) announceNewProductInBackground(updated.publicId || updated._id?.toString());
     return this.internalSummary(updated);
   }
 

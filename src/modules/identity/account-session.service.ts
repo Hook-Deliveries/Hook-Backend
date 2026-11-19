@@ -37,6 +37,8 @@ export async function presentAccountUser(user: User) {
     accountStatus: user.accountStatus,
     avatarUrl: user.avatarUrl,
     isEmailVerified: user.isEmailVerified,
+    // Present only when set, so every existing account payload stays byte-for-byte the same.
+    ...(user.mustChangePassword ? { mustChangePassword: true } : {}),
   };
   if (user.accountType !== AccountType.STAFF) return base;
   const context = await resolveAccessContext(accountId);

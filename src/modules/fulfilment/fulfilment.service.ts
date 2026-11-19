@@ -1988,6 +1988,8 @@ export class FulfilmentService {
     const receivedAt = received[0]?.receivedAt;
     return {
       receiptNumber: base,
+      // Lets the receipt's QR code open a public, personal-details-free tracking page that nobody can guess.
+      trackingSig: this.trackingSignature(base),
       order: { publicId: order.publicId, placedAt: order.createdAt },
       receivedAt,
       // Kept so app versions that predate the hub-receipt flow still show a date.

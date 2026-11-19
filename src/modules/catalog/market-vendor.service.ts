@@ -15,6 +15,7 @@ import { nextPublicId } from '@modules/platform';
 import { decryptVendorAccountNumber, encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
+import { DEFAULT_VENDOR_PASSWORD, provisionVendorAccount, syncVendorAccount } from '@modules/catalog/vendor-account.service';
 
 const email = new EmailService();
 
@@ -242,6 +243,9 @@ export class MarketVendorService {
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone.length < 7) throw new HttpError(400, 'Enter a valid vendor phone number', undefined, 'VALIDATION_ERROR');
     const emailAddress = input.email?.trim().toLowerCase() || undefined;
+    // The email is the vendor's sign-in, so it is required.
+    if (!emailAddress) throw new HttpError(400, 'Enter the vendor email address. It is what they sign in with.', { field: 'email' }, 'VALIDATION_ERROR');
+    if (await User.exists({ email: emailAddress })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
     const duplicate = await MarketVendor.findOne({
       marketId: market._id.toString(),
       deletedAt: { $exists: false },
@@ -275,17 +279,22 @@ export class MarketVendorService {
       throw error;
     }
 
-    // With an email on file the supplier is simply told they were added; nothing is asked of them.
-    let delivery = { delivered: false, provider: 'none' };
-    if (emailAddress) {
-      delivery = await email.send({
-        to: emailAddress,
-        subject: `You are now a Hook supplier in ${market.name}`,
-        html: `<p>Hello ${input.contactName.trim()},</p><p>${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}. Your profile is active and there is nothing else you need to do.</p>`,
-        text: `${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}. Your profile is active and there is nothing else you need to do.`,
-      }).catch(() => ({ delivered: false, provider: 'none' }));
-    }
+    // Vendors are verified from the start and get a login straight away, with a default password they must change.
+    await provisionVendorAccount(vendor);
+    const delivery = await this.sendVendorWelcome(vendor, market.name);
     return { vendor: safeVendor(vendor), delivery };
+  }
+
+  private async sendVendorWelcome(vendor: any, marketName: string, reset = false) {
+    const loginUrl = `${await adminAppBaseUrl()}/auth/login`;
+    const intro = reset ? 'Your Hook vendor password was reset.' : `${vendor.businessName} has been added to Hook in ${marketName}, and your vendor account is ready.`;
+    const body = `Sign in at ${loginUrl} with ${vendor.email} and the temporary password ${DEFAULT_VENDOR_PASSWORD}. You will be asked to choose your own password straight away.`;
+    return email.send({
+      to: vendor.email,
+      subject: reset ? 'Your Hook vendor password was reset' : `Your Hook vendor account for ${marketName}`,
+      html: `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the temporary password <strong>${DEFAULT_VENDOR_PASSWORD}</strong>. You will be asked to choose your own password straight away.</p>`,
+      text: `${intro} ${body}`,
+    }).catch(() => ({ delivered: false, provider: 'none' }));
   }
 
   async updateMarketAssociateVendor(accountId: string, identifier: string, input: any) {
@@ -305,6 +314,7 @@ export class MarketVendorService {
     if (input.email !== undefined) update.email = input.email?.trim().toLowerCase() || undefined;
     if (input.paymentProfile !== undefined) update.paymentProfile = paymentProfile(input.paymentProfile);
     const updated = await MarketVendor.findByIdAndUpdate(vendor._id, { $set: update }, { returnDocument: 'after' }).lean({ virtuals: true });
+    await syncVendorAccount(vendor, update as any);
     return safeVendor(updated);
   }
 
@@ -332,6 +342,7 @@ export class MarketVendorService {
     if (input.email !== undefined) update.email = input.email?.trim().toLowerCase() || undefined;
     if (input.paymentProfile !== undefined) update.paymentProfile = paymentProfile(input.paymentProfile);
     const updated = await MarketVendor.findByIdAndUpdate(vendor._id, { $set: update }, { returnDocument: 'after' }).lean({ virtuals: true });
+    await syncVendorAccount(vendor, update as any);
     return safeVendor(updated);
   }
 
@@ -403,9 +414,13 @@ export class MarketVendorService {
       status: 'pending',
       expiresAt,
     });
-    const inviteUrl = `${(await adminAppBaseUrl())}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
+    // Re-inviting a vendor resets them to the default password and sends the sign-in details again.
+    const inviteUrl = `${await adminAppBaseUrl()}/auth/login`;
     if (vendor.email) {
-      await email.send({ to: vendor.email, subject: `Hook supplier profile reminder for ${vendor.businessName}`, html: `<p>Review your Hook supplier profile here: <a href="${inviteUrl}">${inviteUrl}</a></p>`, text: inviteUrl }).then(() => VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } }));
+      await provisionVendorAccount(vendor, { resetPassword: true });
+      const market = await Market.findById(vendor.marketId).select('name').lean();
+      const delivery: any = await this.sendVendorWelcome(vendor, market?.name || 'your market', true);
+      if (delivery?.delivered) await VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } });
     }
     return { publicId: invitation.publicId, expiresAt, inviteUrl, email: vendor.email || null };
   }

@@ -1,8 +1,8 @@
 import { Notification } from '@models/notifications/notification.model';
 import { User } from '@models/users/user.model';
-import { definitionFor, renderNotification, type NotificationGroup } from '../../notifications/catalog';
+import { definitionFor, renderNotification, webPathFor, type NotificationGroup } from '../../notifications/catalog';
 import { publishRealtime } from '@modules/platform';
-import { sendPushToUser } from '@modules/notifications/push.service';
+import { notifyPush } from '@modules/notifications/push.service';
 
 export interface NotificationPreferences {
   groups: Record<NotificationGroup, boolean>;
@@ -18,6 +18,13 @@ export const DEFAULT_PREFERENCES: NotificationPreferences = {
 
 export const DAILY_ENGAGEMENT_CAP = Number(process.env.PUSH_DAILY_CAP || 1);
 export const WEEKLY_ENGAGEMENT_CAP = Number(process.env.PUSH_WEEKLY_CAP || 3);
+
+/**
+ * A product going live is news customers opted into, so it has its own daily allowance and neither uses up nor is
+ * blocked by the shared engagement cap. Without this, one earlier nudge that day silently dropped every new product.
+ */
+export const NEW_PRODUCT_DAILY_CAP = Number(process.env.PUSH_NEW_PRODUCT_DAILY_CAP || 5);
+const OWN_ALLOWANCE_TYPES = ['new_product'];
 
 /** Nigeria has no daylight saving: Lagos time is always UTC+1. */
 const lagosMinutes = (date: Date) => (date.getUTCHours() * 60 + date.getUTCMinutes() + 60) % (24 * 60);
@@ -78,11 +85,17 @@ export async function dispatchNotification(input: {
     if (isQuietHour(now, preferences.quietHours)) return 'deferred';
     const day = new Date(now.getTime() - 24 * 3_600_000);
     const week = new Date(now.getTime() - 7 * 24 * 3_600_000);
-    const [today, thisWeek] = await Promise.all([
-      Notification.countDocuments({ userId: input.userId, priority: 'engagement', pushedAt: { $gt: day } }),
-      Notification.countDocuments({ userId: input.userId, priority: 'engagement', pushedAt: { $gt: week } }),
-    ]);
-    if (today >= DAILY_ENGAGEMENT_CAP || thisWeek >= WEEKLY_ENGAGEMENT_CAP) return 'suppressed';
+    if (OWN_ALLOWANCE_TYPES.includes(input.type)) {
+      const sentToday = await Notification.countDocuments({ userId: input.userId, type: input.type, pushedAt: { $gt: day } });
+      if (sentToday >= NEW_PRODUCT_DAILY_CAP) return 'suppressed';
+    } else {
+      const shared = { userId: input.userId, priority: 'engagement' as const, type: { $nin: OWN_ALLOWANCE_TYPES } };
+      const [today, thisWeek] = await Promise.all([
+        Notification.countDocuments({ ...shared, pushedAt: { $gt: day } }),
+        Notification.countDocuments({ ...shared, pushedAt: { $gt: week } }),
+      ]);
+      if (today >= DAILY_ENGAGEMENT_CAP || thisWeek >= WEEKLY_ENGAGEMENT_CAP) return 'suppressed';
+    }
     if (definition.cooldownHours) {
       const since = new Date(now.getTime() - definition.cooldownHours * 3_600_000);
       const recent = await Notification.exists({ userId: input.userId, type: input.type, pushedAt: { $gte: since } });
@@ -91,12 +104,14 @@ export async function dispatchNotification(input: {
   }
 
   const { title, body } = renderNotification(input.type, input.params);
+  const params = { ...(input.params || {}), ...(input.data || {}) };
+  const url = webPathFor(definition.screen, params);
   const created = await Notification.findOneAndUpdate(
     { eventKey: input.eventKey },
     {
       $setOnInsert: {
         userId: input.userId, title, body, type: input.type, eventKey: input.eventKey, isRead: false,
-        group: definition.group, priority: definition.priority, data: { ...(input.params || {}), ...(input.data || {}) },
+        group: definition.group, priority: definition.priority, data: { ...params, screen: definition.screen, url },
       },
     },
     { upsert: true, returnDocument: 'after', includeResultMetadata: true },
@@ -105,10 +120,10 @@ export async function dispatchNotification(input: {
 
   const notification = created.value as { _id: { toString(): string } };
   publishRealtime({ type: 'notification.created', entityId: input.eventKey, version: 1 }, { accountId: input.userId });
-  await sendPushToUser(input.userId, {
+  await notifyPush(input.userId, {
     title,
     body,
-    data: { type: input.type, group: definition.group, screen: definition.screen, params: { ...(input.params || {}), ...(input.data || {}) }, notificationId: notification._id.toString() },
+    data: { type: input.type, group: definition.group, screen: definition.screen, params, url, notificationId: notification._id.toString() },
   }).catch(() => undefined);
   await Notification.updateOne({ _id: notification._id }, { $set: { pushedAt: now } });
   return 'sent';

@@ -12,7 +12,7 @@ export class PaymentLinkController {
 
   create = async (req: Request, res: Response) => {
     if (!req.user?.sub) throw new HttpError(401, "Customer authentication required");
-    sendCreated(res, await this.service.create(req.user.sub, req.body.orderId, req.body.fulfilmentGroupId));
+    sendCreated(res, await this.service.create(req.user.sub, req.body.orderId, req.body.fulfilmentGroupId, req.body.returnUrl));
   };
 
   detail = async (req: Request, res: Response) => {

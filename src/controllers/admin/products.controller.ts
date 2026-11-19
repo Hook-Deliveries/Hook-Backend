@@ -1,7 +1,7 @@
 import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
 import { reconcileProductInBackground } from '@modules/negotiation/negotiation-reconcile.service';
 import { onSaleFilter } from '@lib/product-availability';
-import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
+import { announceNewProductInBackground, notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -74,6 +74,8 @@ function publishProductUpdate(product: any) {
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
   // Any open negotiation or locked price on this product is re-checked against the change.
   reconcileProductInBackground(product._id?.toString());
+  // Only a product published in the last few minutes is announced; edits to older ones are ignored.
+  if (product.status === ProductStatus.PUBLISHED) announceNewProductInBackground(product.publicId || product._id?.toString());
 }
 
 function assertAdminPublishReady(product: Record<string, any>) {

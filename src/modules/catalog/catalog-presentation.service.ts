@@ -102,6 +102,7 @@ function format(record: any, resolved: Resolved, mediaService: CatalogMediaServi
     id: record.publicId,
     publicId: record.publicId,
     marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId, name: marketAssociate.name } : null,
+    createdBy: record.createdBy || 'market_associate',
     marketId: market?.publicId,
     market: market ? { publicId: market.publicId, name: market.name } : null,
     sourceStateId: state?.publicId,

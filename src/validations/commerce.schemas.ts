@@ -103,6 +103,8 @@ export const paymentInitializeV4Schema = z
 export const paymentLinkCreateSchema = z.object({
   orderId: publicId,
   fulfilmentGroupId: publicId.optional(),
+  /** Where to send the shopper after paying; only the shop's own origins are honoured. Omitted by the mobile app. */
+  returnUrl: z.string().url().max(500).optional(),
 }).strict();
 
 export const paymentLinkInitializeSchema = z.object({

@@ -20,6 +20,8 @@ export interface PaymentLink extends BaseEntity {
   revokedAt?: Date;
   lastAccessedAt?: Date;
   createdBy: string;
+  /** Where the website that started this payment wants the shopper sent afterwards (checked against the allowed origins). */
+  returnUrl?: string;
 }
 
 export interface PaymentAttempt extends BaseEntity {
@@ -64,6 +66,7 @@ const paymentLinkSchema = createSchema<PaymentLink>({
   revokedAt: { type: Date },
   lastAccessedAt: { type: Date },
   createdBy: { type: String, required: true },
+  returnUrl: { type: String },
   deletedAt: { type: Date },
 });
 paymentLinkSchema.index({ paymentId: 1, status: 1, expiresAt: 1 });

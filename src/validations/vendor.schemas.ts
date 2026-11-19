@@ -14,7 +14,8 @@ export const marketVendorSchema = z.object({
   businessName: z.string().trim().min(2).max(180),
   contactName: z.string().trim().min(2).max(120),
   phone: z.string().trim().min(7).max(30),
-  email: z.string().email().optional(),
+  // The email is the vendor's sign-in, so a new vendor needs one.
+  email: z.string().email('Enter a valid email address'),
   address: z.string().trim().max(500).optional(),
   preferredContactChannel: z.enum(['phone', 'email', 'whatsapp']).default('phone'),
   paymentProfile,

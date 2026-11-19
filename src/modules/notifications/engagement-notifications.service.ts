@@ -4,6 +4,9 @@ import { NegotiatedQuote } from '@models/catalog/catalog.model';
 import { CustomerAddress } from '@models/commerce/commerce.model';
 import { Negotiation } from '@models/negotiations/negotiation.model';
 import { DeviceToken } from '@models/notifications/device-token.model';
+import { WebPushSubscription } from '@models/notifications/web-push-subscription.model';
+import { Market } from '@models/platform/network.model';
+import { OperationState } from '@models/platform/geography.model';
 import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { ProductLike } from '@models/products/product-like.model';
@@ -152,10 +155,22 @@ async function customerStates(userIds: string[]) {
   return map;
 }
 
-/** Customers with a phone registered, optionally only those in one State. */
+/** Customer accounts with a browser subscribed to push (staff and partners subscribe too, but are not shoppers). */
+async function webPushCustomers(): Promise<string[]> {
+  const subscribed = (await WebPushSubscription.distinct('userId', { isActive: true })) as string[];
+  if (!subscribed.length) return [];
+  const filter: Record<string, unknown> = {
+    _id: { $in: subscribed.filter((id) => /^[a-f\d]{24}$/i.test(id)) },
+    $or: [{ accountType: 'customer' }, { accountType: { $exists: false }, role: 'shopper' }],
+  };
+  const customers = (await User.find(filter).select('_id').lean()) as Array<{ _id: { toString(): string } }>;
+  return customers.map((customer) => customer._id.toString());
+}
+
+/** Customers reachable by push, on a phone or in a browser, optionally only those in one State. */
 export async function audienceFor(stateId?: string, limit = 5000): Promise<Array<{ userId: string; stateId?: string }>> {
-  const tokens = (await DeviceToken.distinct('userId', { isActive: true })) as string[];
-  const ids = tokens.slice(0, limit);
+  const [phones, browsers] = await Promise.all([DeviceToken.distinct('userId', { isActive: true }) as Promise<string[]>, webPushCustomers()]);
+  const ids = [...new Set([...phones, ...browsers])].slice(0, limit);
   const states = await customerStates(ids);
   return ids
     .map((userId) => ({ userId, stateId: states.get(userId) }))
@@ -230,4 +245,51 @@ export async function notifyLikersOfProductChange(
     }
   }
   return report;
+}
+
+const NEW_PRODUCT_WINDOW_MS = 15 * MINUTE;
+
+/**
+ * A product just went live: tell shoppers which Market it is from and in which State, and open that product when the
+ * notification is tapped (in the app and in the browser). Shoppers in the product's own State are notified first.
+ * Safe to call from every publish path and to call twice: each shopper gets it at most once per product, and old
+ * products are ignored so editing one never re-announces it.
+ */
+export async function announceNewProduct(productId: string, now = new Date()): Promise<ScanReport> {
+  const report = emptyReport();
+  const isObjectId = /^[a-f\d]{24}$/i.test(productId);
+  const product = (await Product.findOne(isObjectId ? { $or: [{ _id: productId }, { publicId: productId }] } : { publicId: productId })
+    .select('publicId title status publishedAt marketId sourceStateId sellingPriceMinor discountedPriceMinor images')
+    .lean()) as { _id: { toString(): string }; publicId?: string; title?: string; status?: string; publishedAt?: Date; marketId?: string; sourceStateId?: string; sellingPriceMinor?: number; discountedPriceMinor?: number; images?: string[] } | null;
+  if (!product?.publicId || product.status !== ProductStatus.PUBLISHED || !product.publishedAt) return report;
+  if (now.getTime() - new Date(product.publishedAt).getTime() > NEW_PRODUCT_WINDOW_MS) return report;
+
+  const [market, state] = await Promise.all([
+    product.marketId && /^[a-f\d]{24}$/i.test(product.marketId) ? (Market.findById(product.marketId).select('name').lean() as Promise<{ name?: string } | null>) : null,
+    product.sourceStateId && /^[a-f\d]{24}$/i.test(product.sourceStateId) ? (OperationState.findById(product.sourceStateId).select('name').lean() as Promise<{ name?: string } | null>) : null,
+  ]);
+  const priceMinor = Number(product.discountedPriceMinor || product.sellingPriceMinor || 0);
+  const params = {
+    title: product.title,
+    marketName: market?.name,
+    stateName: state?.name,
+    price: priceMinor > 0 ? `₦${(priceMinor / 100).toLocaleString('en-NG')}` : undefined,
+    imageUrl: product.images?.[0],
+  };
+  const data = { productId: product.publicId, marketId: product.marketId, stateId: product.sourceStateId };
+
+  const audience = (await audienceFor()).sort((a, b) => Number(b.stateId === product.sourceStateId) - Number(a.stateId === product.sourceStateId));
+  for (const entry of audience) {
+    await send(report, { type: 'new_product', userId: entry.userId, eventKey: `new_product:${product.publicId}:${entry.userId}`, params, data, now });
+  }
+  return report;
+}
+
+/** Fire-and-forget wrapper for the publish paths: it can never fail or slow the admin's action. */
+export function announceNewProductInBackground(productId?: string) {
+  if (!productId) return;
+  void announceNewProduct(productId)
+    // The counts say why a customer did not get it: held for quiet hours, over the daily allowance, switched off, or already sent.
+    .then((report) => console.info('[push] new product announced', productId, JSON.stringify(report)))
+    .catch((error) => console.warn('[push] new product announcement failed', error instanceof Error ? error.message : error));
 }
