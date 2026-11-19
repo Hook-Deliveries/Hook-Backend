@@ -128,8 +128,10 @@ export interface SubmissionDecisionEmailPayload {
   to: string;
   name?: string;
   productTitle: string;
-  decision: 'approved' | 'rejected' | 'changes_requested';
+  decision: 'approved' | 'rejected' | 'changes_requested' | 'live' | 'back_on_sale';
   reason?: string;
+  /** For an approval: false when it was approved but not published, so it is not on sale yet. */
+  live?: boolean;
 }
 
 export interface AccountActivatedEmailPayload {

@@ -93,6 +93,7 @@ export function createAuthRouter() {
   router.get('/profile', requireAuth, asyncHandler(controller.profile));
   router.patch('/profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.updateProfile));
   router.post('/complete-profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.completeProfile));
+  router.post('/password/keep-default', requireAuth, asyncHandler(controller.keepDefaultPassword));
   router.post('/password/change', requireAuth, validateBody(changePasswordSchema), asyncHandler(controller.changePassword));
 
   return router;

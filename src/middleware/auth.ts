@@ -154,7 +154,27 @@ export async function requirePasswordChanged(req: Request, _res: Response, next:
   try {
     const user = await User.findById(req.user?.sub).select('mustChangePassword').lean();
     if (user?.mustChangePassword) {
+      // A vendor may choose to keep the default password for this sign-in. The choice lives on the session, so the
+      // next sign-in asks again.
+      const session = req.user?.sid ? await AccountSession.findById(req.user.sid).select('defaultPasswordKeptAt').lean() : null;
+      if (session?.defaultPasswordKeptAt) return next();
       return next(new HttpError(403, 'Change your password to continue', undefined, 'PASSWORD_CHANGE_REQUIRED'));
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * For actions where a shared, well-known password is too risky even if the vendor chose to keep it (changing where
+ * their money is paid, for example): the vendor must have their own password first.
+ */
+export async function requireOwnPassword(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.user?.sub).select('mustChangePassword').lean();
+    if (user?.mustChangePassword) {
+      return next(new HttpError(403, 'Choose your own password before doing this', undefined, 'OWN_PASSWORD_REQUIRED'));
     }
     next();
   } catch (error) {

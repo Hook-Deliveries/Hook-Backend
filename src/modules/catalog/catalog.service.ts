@@ -496,7 +496,10 @@ export class MarketAssociateCatalogService {
 export class CatalogReviewService {
   private readonly email = new EmailService();
 
-  private async notifySubmissionDecision(submissionId: string, marketAssociateId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string, marketVendorId?: string) {
+  private async notifySubmissionDecision(submissionId: string, marketAssociateId: string | undefined, productTitle: string, decision: 'approved' | 'rejected' | 'changes_requested', reason?: string, marketVendorId?: string, live = false) {
+    // A vendor's product that goes straight to live gets the one "now live" message (in-app, push and email) from the publish
+    // itself, so a second "approved" message would only repeat it.
+    if (decision === 'approved' && live && !marketAssociateId && marketVendorId) return;
     // Products a vendor captured themselves tell the vendor; ones an associate captured tell the associate.
     let marketAssociate: any = marketAssociateId ? await MarketAssociateProfile.findById(marketAssociateId).select('accountId').lean() : null;
     if (!marketAssociate && marketVendorId) marketAssociate = await MarketVendor.findById(marketVendorId).select('accountId').lean();
@@ -506,7 +509,7 @@ export class CatalogReviewService {
       eventKey: `submission:${submissionId}:${decision}:${Date.now()}`,
       userId: marketAssociate.accountId,
       title: decision === 'approved' ? 'Your submission was approved' : decision === 'rejected' ? 'Your submission was not approved' : 'Changes requested on your submission',
-      body: decision === 'approved' ? `${productTitle} was approved and is now live on Hook.` : decision === 'rejected' ? `${productTitle} was not approved.` : `${productTitle} needs a few changes before it can go live.`,
+      body: decision === 'approved' ? (live ? `${productTitle} was approved and is now live on Hook.` : `${productTitle} was approved. It is not live yet: Hook will publish it once its price and availability are confirmed.`) : decision === 'rejected' ? `${productTitle} was not approved.` : `${productTitle} needs a few changes before it can go live.`,
       type: 'submission_decision',
       data: { decision, productTitle, submissionId },
     }).catch(() => undefined);
@@ -518,6 +521,7 @@ export class CatalogReviewService {
         productTitle,
         decision,
         reason,
+        live,
       }).catch(() => undefined);
     }
   }
@@ -902,7 +906,7 @@ export class CatalogReviewService {
         );
         if (releasedIds.length) await CatalogMediaAsset.updateMany({ _id: { $in: releasedIds } }, { $set: { status: 'removed' } }, { session: transaction });
       });
-      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason, current.marketVendorId);
+      await this.notifySubmissionDecision(current._id.toString(), current.marketAssociateId, current.basicTitle, 'approved', approveInput.reason, current.marketVendorId, isPublished);
       if (isPublished && publishedProductId) announceNewProductInBackground(publishedProductId);
       return result;
     } finally {

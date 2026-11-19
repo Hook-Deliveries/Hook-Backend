@@ -1,3 +1,4 @@
+import { notifyVendorProductLiveInBackground } from './vendor-product-notifications.service';
 import { Cart } from '@models/cart/cart.model';
 import { CartItem } from '@models/cart/cart-item.model';
 import { NegotiatedQuote } from '@models/catalog/catalog.model';
@@ -288,6 +289,8 @@ export async function announceNewProduct(productId: string, now = new Date()): P
 /** Fire-and-forget wrapper for the publish paths: it can never fail or slow the admin's action. */
 export function announceNewProductInBackground(productId?: string) {
   if (!productId) return;
+  // The vendor who owns it hears that it is live too (in-app, push and email); every publish path comes through here.
+  notifyVendorProductLiveInBackground(productId);
   void announceNewProduct(productId)
     // The counts say why a customer did not get it: held for quiet hours, over the daily allowance, switched off, or already sent.
     .then((report) => console.info('[push] new product announced', productId, JSON.stringify(report)))

@@ -411,12 +411,19 @@ const submissionDecisionCopy: Record<SubmissionDecisionEmailPayload['decision'],
   approved: { title: 'Your submission was approved', lead: 'was approved and is now live on Hook.', label: 'Approved', icon: '✓' },
   rejected: { title: 'Your submission was not approved', lead: 'was not approved.', label: 'Rejected', icon: '✕' },
   changes_requested: { title: 'Changes requested on your submission', lead: 'needs a few changes before it can go live.', label: 'Changes requested', icon: '!' },
+  live: { title: 'Your product is now live', lead: 'is now live in the Hook app. Customers can find and buy it.', label: 'Live', icon: '✓' },
+  back_on_sale: { title: 'Your product is back on sale', lead: 'passed its market recheck and is back on sale in the Hook app.', label: 'Back on sale', icon: '✓' },
 };
 
+/** An approval that was not published is not on sale yet, so it must not say "live". */
+const APPROVED_NOT_LIVE_LEAD = 'was approved. It is not live yet: Hook will publish it as soon as its price and availability are confirmed.';
+
 export function submissionDecisionEmailTemplate(payload: SubmissionDecisionEmailPayload) {
-  const copy = submissionDecisionCopy[payload.decision];
+  const base = submissionDecisionCopy[payload.decision];
+  const copy = payload.decision === 'approved' && payload.live === false ? { ...base, lead: APPROVED_NOT_LIVE_LEAD } : base;
+  const subject = payload.decision === 'live' ? `Live on Hook: ${payload.productTitle}` : payload.decision === 'back_on_sale' ? `Back on sale: ${payload.productTitle}` : `Hook submission update: ${payload.productTitle}`;
   return {
-    subject: `Hook submission update: ${payload.productTitle}`,
+    subject,
     html: renderTemplate('submission-decision.html', baseValues({
       name: payload.name || 'there',
       productTitle: payload.productTitle,
