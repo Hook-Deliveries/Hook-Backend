@@ -33,7 +33,8 @@ const grantLater = (name: string, permissions: string[]) => Role.collection.upda
 
 async function paidOrder(publicId: string, stateId: string, paidAt = new Date()) {
   const orderId = id();
-  await Order.collection.insertOne({ _id: orderId, publicId, userId: 'u', commerceStatus: 'IN_FULFILMENT', commercePaymentStatus: 'CONFIRMED', totalMinor: 1_300_000, sourceStateId: stateId, addressSnapshot: { cityName: 'Ibadan', stateName: 'Oyo' }, createdAt: paidAt, updatedAt: paidAt });
+  // Raw inserts skip the schema, but the unique orderCode index still applies, so each order needs its own code.
+  await Order.collection.insertOne({ _id: orderId, publicId, orderCode: `CODE-${publicId}`, userId: 'u', commerceStatus: 'IN_FULFILMENT', commercePaymentStatus: 'CONFIRMED', totalMinor: 1_300_000, sourceStateId: stateId, addressSnapshot: { cityName: 'Ibadan', stateName: 'Oyo' }, createdAt: paidAt, updatedAt: paidAt });
   await Payment.collection.insertOne({ _id: id(), publicId: `PAY-${publicId}`, transactionRef: `TXN-${publicId}`, orderId: String(orderId), commerceStatus: 'CONFIRMED', paidAt, createdAt: paidAt });
 }
 
