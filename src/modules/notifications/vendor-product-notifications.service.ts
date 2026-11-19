@@ -10,15 +10,17 @@ import { createCommerceNotification } from './commerce-notification.service';
 /**
  * Tells a vendor, in the app, by browser/phone push and by email, when their product reaches customers:
  *  - `live`: it was published (approved straight to live, or published later by Hook);
- *  - `back_on_sale`: it passed a market recheck after being out of stock.
+ *  - `back_on_sale`: it passed a market recheck after being out of stock;
+ *  - `confirm_availability`: its availability window ran out, so it is hidden until the vendor confirms it is still available.
  *
  * Safe to call from every publish path and to call twice: each moment notifies once, keyed by when the product went
  * live, so a retry, a second publish path or an edit never repeats it. Products without a vendor owner (captured by a
  * Market Associate or created by staff) are ignored here, because their submitter is told by the review decision.
  */
-const FRESH_MS = 15 * 60_000;
+/** How recent the moment must be to announce it. The window job runs on a schedule, so its moment gets more room. */
+const FRESH_MS: Record<Moment, number> = { live: 15 * 60_000, back_on_sale: 15 * 60_000, confirm_availability: 6 * 60 * 60_000 };
 
-type Moment = 'live' | 'back_on_sale';
+type Moment = 'live' | 'back_on_sale' | 'confirm_availability';
 
 const COPY: Record<Moment, { title: string; body: (title: string) => string; reason: string }> = {
   live: {
@@ -31,18 +33,27 @@ const COPY: Record<Moment, { title: string; body: (title: string) => string; rea
     body: (title) => `${title} passed its market recheck and is back on sale in the Hook app.`,
     reason: 'It passed Hook’s market recheck, so customers can see and buy it again.',
   },
+  confirm_availability: {
+    title: 'Is this still available?',
+    body: (title) => `${title} reached the end of its availability window, so customers cannot see it. Confirm it is still available to put it back on sale.`,
+    reason: 'Open the product and tap “Yes, still available”. If you have run out, mark it out of stock instead.',
+  },
 };
 
 export async function notifyVendorProductLive(productId: string, moment: Moment = 'live') {
   const isObjectId = /^[a-f\d]{24}$/i.test(productId);
   const product: any = await Product.findOne(isObjectId ? { $or: [{ _id: productId }, { publicId: productId }] } : { publicId: productId })
-    .select('publicId title status publishedAt lastAvailabilityConfirmedAt sourceMarketVendorId sourceSubmissionId')
+    .select('publicId title status publishedAt lastAvailabilityConfirmedAt availabilityCheckRequestedAt availabilityPreviousStatus sourceMarketVendorId sourceSubmissionId')
     .lean();
-  if (!product?.publicId || !product.sourceMarketVendorId || product.status !== ProductStatus.PUBLISHED) return false;
+  if (!product?.publicId || !product.sourceMarketVendorId) return false;
+  // Asking for a confirmation only makes sense for a product that was live and is now waiting; the others need it on sale.
+  const waiting = product.status === ProductStatus.AVAILABILITY_UNCONFIRMED && product.availabilityPreviousStatus === ProductStatus.PUBLISHED;
+  if (moment === 'confirm_availability' ? !waiting : product.status !== ProductStatus.PUBLISHED) return false;
 
   // The moment this notification is about, so only a fresh one is announced and each one is announced once.
-  const at = new Date(moment === 'live' ? product.publishedAt : product.lastAvailabilityConfirmedAt || product.publishedAt || 0);
-  if (!at.getTime() || Date.now() - at.getTime() > FRESH_MS) return false;
+  const moments: Record<Moment, unknown> = { live: product.publishedAt, back_on_sale: product.lastAvailabilityConfirmedAt || product.publishedAt, confirm_availability: product.availabilityCheckRequestedAt };
+  const at = new Date((moments[moment] as Date | undefined) || 0);
+  if (!at.getTime() || Date.now() - at.getTime() > FRESH_MS[moment]) return false;
   const eventKey = `vendor-product:${product.publicId}:${moment}:${at.getTime()}`;
   if (await Notification.exists({ eventKey })) return false;
 
@@ -59,7 +70,7 @@ export async function notifyVendorProductLive(productId: string, moment: Moment 
     title: copy.title,
     body: copy.body(title),
     type: 'submission_decision',
-    data: { decision: moment, productTitle: title, productId: product.publicId, submissionId: submission?.publicId, href: submission?.publicId ? `/vendor/products/${submission.publicId}` : '/vendor/products' },
+    data: { decision: moment, action: moment === 'confirm_availability' ? 'confirm_availability' : undefined, productTitle: title, productId: product.publicId, submissionId: submission?.publicId, href: submission?.publicId ? `/vendor/products/${submission.publicId}` : '/vendor/products' },
   }).catch(() => undefined);
 
   const account: any = await User.findById(vendor.accountId).select('email firstName').lean();

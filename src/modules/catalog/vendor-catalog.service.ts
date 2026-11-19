@@ -1,4 +1,5 @@
 import { ProductAvailabilityStatus, ProductStatus, ProductSubmissionStatus } from '@lib/constants';
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
 import { CatalogMediaAsset, ProductSubmission, type SubmissionVariant } from '@models/catalog/catalog.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { Product } from '@models/products/product.model';
@@ -33,6 +34,18 @@ async function vendorFor(accountId: string) {
   if (!vendor) throw new HttpError(403, 'No vendor profile is linked to this account', undefined, 'ACCESS_DENIED');
   if (vendor.status !== 'active') throw new HttpError(403, 'This vendor account is not active', undefined, 'ACCESS_DENIED');
   return vendor;
+}
+
+/**
+ * Everything on a vendor's shelf: what they captured themselves, plus what a Market Associate added in their name once it
+ * has been sent in. An associate's unfinished draft stays private to the associate, and only the creator edits a submission.
+ */
+function shelfFilter(vendorId: string): Record<string, any> {
+  return {
+    marketVendorId: vendorId,
+    deletedAt: { $exists: false },
+    $or: [{ createdBy: 'vendor' }, { status: { $ne: ProductSubmissionStatus.DRAFT } }],
+  };
 }
 
 /** Reviewer notes a vendor may see: what was decided and why, without who decided it. */
@@ -157,9 +170,9 @@ export class VendorCatalogService {
   async dashboard(accountId: string) {
     const vendor = await vendorFor(accountId);
     const vendorId = vendor._id.toString();
-    const [counts, published, paused, recent] = await Promise.all([
+    const [counts, published, paused, recent, awaitingConfirmation] = await Promise.all([
       ProductSubmission.aggregate([
-        { $match: { marketVendorId: vendorId, createdBy: 'vendor', deletedAt: { $exists: false } } },
+        { $match: shelfFilter(vendorId) },
         { $group: { _id: '$status', count: { $sum: 1 } } },
       ]),
       Product.countDocuments({ sourceMarketVendorId: vendorId, status: ProductStatus.PUBLISHED, deletedAt: { $exists: false } }),
@@ -169,6 +182,8 @@ export class VendorCatalogService {
         .sort({ publishedAt: -1 })
         .limit(5)
         .lean({ virtuals: true }),
+      // Products that reached the end of their availability window and are hidden until the vendor confirms them.
+      Product.countDocuments({ sourceMarketVendorId: vendorId, status: ProductStatus.AVAILABILITY_UNCONFIRMED, availabilityPreviousStatus: ProductStatus.PUBLISHED, deletedAt: { $exists: false } }),
     ]);
     const byStatus = Object.fromEntries(counts.map((item: any) => [item._id, item.count]));
     return {
@@ -181,20 +196,21 @@ export class VendorCatalogService {
       published,
       paused,
       recentPublished: recent,
+      awaitingConfirmation,
     };
   }
 
   async list(accountId: string, query: Record<string, unknown>) {
     const vendor = await vendorFor(accountId);
     const limit = Math.min(Math.max(Number(query.limit || 20), 1), 50);
-    const filter: Record<string, any> = { marketVendorId: vendor._id.toString(), createdBy: 'vendor', deletedAt: { $exists: false } };
+    const filter: Record<string, any> = shelfFilter(vendor._id.toString());
     if (query.status && Object.values(ProductSubmissionStatus).includes(query.status as ProductSubmissionStatus)) filter.status = query.status;
     if (query.cursor) filter._id = { $lt: query.cursor };
     const rows = await ProductSubmission.find(filter).sort({ _id: -1 }).limit(limit + 1).lean({ virtuals: true });
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     const products = await Product.find({ _id: { $in: page.map((row: any) => row.productId).filter(Boolean) } })
-      .select('publicId status availabilityStatus images')
+      .select('publicId status availabilityStatus availabilityValidUntil availabilityPreviousStatus images')
       .lean({ virtuals: true });
     const productById = new Map(products.map((product: any) => [String(product._id), product]));
     const mediaIds = [...new Set(page.flatMap((row: any) => row.mediaIds || []).map(String))];
@@ -206,7 +222,7 @@ export class VendorCatalogService {
         const product: any = row.productId ? productById.get(String(row.productId)) : undefined;
         return present(row, {
           imageUrl: urlById.get(row.mediaViews?.front || row.mediaIds?.[0]) || product?.images?.[0],
-          product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus } : null,
+          product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED } : null,
         });
       }),
       nextCursor: hasMore && page.length ? String((page[page.length - 1] as any)._id) : null,
@@ -214,26 +230,24 @@ export class VendorCatalogService {
     };
   }
 
-  private async own(accountId: string, identifier: string) {
+  /** `forEditing` limits the lookup to what the vendor captured themselves: an associate's submission is read-only here. */
+  private async own(accountId: string, identifier: string, forEditing = true) {
     const vendor = await vendorFor(accountId);
-    const submission = await ProductSubmission.findOne({
-      ...identifierQuery(identifier),
-      marketVendorId: vendor._id.toString(),
-      createdBy: 'vendor',
-      deletedAt: { $exists: false },
-    }).lean({ virtuals: true });
+    // `$and`, because the id lookup and the shelf filter can both carry their own `$or`, and spreading drops one of them.
+    const scope = forEditing ? { marketVendorId: vendor._id.toString(), createdBy: 'vendor', deletedAt: { $exists: false } } : shelfFilter(vendor._id.toString());
+    const submission = await ProductSubmission.findOne({ $and: [identifierQuery(identifier), scope] } as any).lean({ virtuals: true });
     if (!submission) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
     return { vendor, submission: submission as any };
   }
 
   async detail(accountId: string, identifier: string) {
-    const { submission } = await this.own(accountId, identifier);
+    const { submission } = await this.own(accountId, identifier, false);
     const media = await CatalogMediaAsset.find({
       $or: [{ publicId: { $in: submission.mediaIds } }, { _id: { $in: submission.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }],
       status: 'ready',
     }).lean({ virtuals: true });
     const mediaService = new CatalogMediaService();
-    const product: any = submission.productId ? await Product.findById(submission.productId).select('publicId status availabilityStatus').lean({ virtuals: true }) : null;
+    const product: any = submission.productId ? await Product.findById(submission.productId).select('publicId status availabilityStatus availabilityValidUntil availabilityPreviousStatus').lean({ virtuals: true }) : null;
     // A submission keeps its market and category by internal id, but the form lists and matches them by public id. Without
     // translating, the product page shows "—" for both and an edited draft opens with no category chosen.
     const isId = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
@@ -245,7 +259,7 @@ export class VendorCatalogService {
       marketId: market?.publicId || submission.marketId,
       categorySuggestionId: categoryRecord?.publicId || submission.categorySuggestionId,
       media: media.map((asset: any) => ({ ...asset, deliveryUrl: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset) })),
-      product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus } : null,
+      product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED } : null,
     });
   }
 
@@ -427,14 +441,7 @@ export class VendorCatalogService {
     ).lean({ virtuals: true });
     if (!updated) throw new HttpError(409, 'This product changed a moment ago. Refresh and try again.', undefined, 'STALE_VERSION');
 
-    // Everything that shows this product refreshes now: the customer app's lists, home and product page, and the admin screens.
-    const event = { entityId: updated.publicId, version: Number(updated.catalogVersion || 1), scope: updated.sourceStateId ? { stateId: String(updated.sourceStateId) } : undefined };
-    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
-    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
-    publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
-    // A product that left sale takes its negotiations and locked prices with it, and customers' carts are re-checked.
-    reconcileProductInBackground(updated._id?.toString());
-    adminProductStatsCache.clear();
+    this.broadcastChange(updated);
 
     if (wantsOut || needsConfirmation) {
       await notifyStaffByPermission({
@@ -448,6 +455,58 @@ export class VendorCatalogService {
       }).catch((error) => console.warn('[vendor] stock notification failed', error instanceof Error ? error.message : error));
     }
     return this.availabilityResult(updated, needsConfirmation);
+  }
+
+  /** Everything that shows this product refreshes now: the customer app's lists, home and product page, and the admin screens. */
+  private broadcastChange(updated: any) {
+    const event = { entityId: updated.publicId, version: Number(updated.catalogVersion || 1), scope: updated.sourceStateId ? { stateId: String(updated.sourceStateId) } : undefined };
+    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+    // A product that left sale takes its negotiations and locked prices with it, and customers' carts are re-checked.
+    reconcileProductInBackground(updated._id?.toString());
+    adminProductStatsCache.clear();
+  }
+
+  /**
+   * The vendor says a product they own is still available, which renews its availability window. This is how a product
+   * that reached the end of its window (and was hidden while it waited for a recheck) comes back without waiting for a
+   * visit, and how a live one is kept on sale. It only applies to a product that was already live: one that never was has
+   * to go through Hook first.
+   */
+  async confirmAvailability(accountId: string, productIdentifier: string) {
+    const vendor = await vendorFor(accountId);
+    const product: any = await Product.findOne({
+      $or: [{ publicId: productIdentifier }, { hookId: productIdentifier }],
+      sourceMarketVendorId: vendor._id.toString(),
+      deletedAt: { $exists: false },
+    });
+    if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+    const waiting = product.status === ProductStatus.AVAILABILITY_UNCONFIRMED && product.availabilityPreviousStatus === ProductStatus.PUBLISHED && product.commercialApproval?.approved === true;
+    if (!waiting && product.status !== ProductStatus.PUBLISHED) {
+      throw new HttpError(409, 'This product is not waiting for your confirmation', undefined, 'INVALID_STATE_TRANSITION');
+    }
+
+    const now = new Date();
+    const updated: any = await Product.findOneAndUpdate(
+      { _id: product._id, status: product.status },
+      {
+        $set: {
+          status: ProductStatus.PUBLISHED,
+          availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
+          lastAvailabilityConfirmedAt: now,
+          availabilityValidUntil: await availabilityValidUntil(now),
+          availabilityCheckNote: 'Confirmed available by the vendor.',
+          customerAvailabilityNote: 'Available from a verified Hook Market.',
+        },
+        $unset: { availabilityPreviousStatus: 1, availabilityCheckDueAt: 1, availabilityEscalatedAt: 1, availabilityCheckRequestedAt: 1, availabilityCheckRequestedBy: 1 },
+        $inc: { catalogVersion: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product changed a moment ago. Refresh and try again.', undefined, 'STALE_VERSION');
+    this.broadcastChange(updated);
+    return this.availabilityResult(updated, false);
   }
 
   private availabilityResult(product: any, needsConfirmation: boolean) {

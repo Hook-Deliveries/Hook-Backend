@@ -128,7 +128,7 @@ export interface SubmissionDecisionEmailPayload {
   to: string;
   name?: string;
   productTitle: string;
-  decision: 'approved' | 'rejected' | 'changes_requested' | 'live' | 'back_on_sale';
+  decision: 'approved' | 'rejected' | 'changes_requested' | 'live' | 'back_on_sale' | 'confirm_availability';
   reason?: string;
   /** For an approval: false when it was approved but not published, so it is not on sale yet. */
   live?: boolean;
