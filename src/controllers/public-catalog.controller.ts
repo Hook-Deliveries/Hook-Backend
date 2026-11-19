@@ -291,9 +291,12 @@ export class PublicCatalogController {
             { status: ProductStatus.PUBLISHED },
             {
               status: {
+                // Not on sale right now, but the page still opens and says so: a shared link, a bookmark or an open tab must
+                // not turn into "not found" because a vendor ran out of stock or a recheck is under way.
                 $in: [
                   ProductStatus.AVAILABILITY_UNCONFIRMED,
                   ProductStatus.PAUSED,
+                  ProductStatus.SOLD_OUT,
                 ],
               },
               availabilityStatus: {
