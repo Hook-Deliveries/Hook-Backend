@@ -48,6 +48,33 @@ function shelfFilter(vendorId: string): Record<string, any> {
   };
 }
 
+/** The slice of a live product the vendor screens need: its state, and whether it can be confirmed after a recheck. */
+function stockView(product: any) {
+  return { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED };
+}
+
+/** Statuses at which a product Hook created for a vendor is shown to them: it has been published at some point. */
+const DIRECT_PRODUCT_STATUSES = [ProductStatus.PUBLISHED, ProductStatus.PAUSED, ProductStatus.SOLD_OUT, ProductStatus.AVAILABILITY_UNCONFIRMED, ProductStatus.UNPUBLISHED];
+
+/**
+ * A product Hook created directly in the admin for this vendor has no submission behind it, so it would never reach the
+ * vendor's list. It is shown as an approved, read-only row, with the same stock controls as any other live product.
+ */
+function directProductRow(product: any) {
+  return {
+    publicId: product.publicId,
+    basicTitle: product.title,
+    status: ProductSubmissionStatus.APPROVED,
+    createdBy: 'market_associate',
+    basePriceMinor: Math.round(Number(product.basePriceMinor ?? Number(product.costPrice || 0) * 100)),
+    currency: product.currency || 'NGN',
+    updatedAt: product.updatedAt,
+    imageUrl: product.images?.[0],
+    reviewNotes: [],
+    product: stockView(product),
+  };
+}
+
 /** Reviewer notes a vendor may see: what was decided and why, without who decided it. */
 function publicNotes(notes: any[] = []) {
   return notes.map((note) => ({ action: note.action, message: note.message, fields: note.fields, createdAt: note.createdAt }));
@@ -217,14 +244,25 @@ export class VendorCatalogService {
     const media = mediaIds.length ? await CatalogMediaAsset.find({ publicId: { $in: mediaIds }, status: 'ready' }).lean({ virtuals: true }) : [];
     const mediaService = new CatalogMediaService();
     const urlById = new Map(media.map((asset: any) => [asset.publicId, asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset)]));
+    // Products Hook created for the vendor directly (no submission) join the first page, newest first with the rest.
+    const showDirect = !query.cursor && (!query.status || query.status === ProductSubmissionStatus.APPROVED);
+    const direct = showDirect
+      ? ((await Product.find({ sourceMarketVendorId: vendor._id.toString(), sourceSubmissionId: { $exists: false }, status: { $in: DIRECT_PRODUCT_STATUSES }, deletedAt: { $exists: false } })
+          .select('publicId title status images basePriceMinor costPrice currency updatedAt availabilityStatus availabilityValidUntil availabilityPreviousStatus')
+          .sort({ updatedAt: -1 })
+          .limit(50)
+          .lean({ virtuals: true })) as any[]).map(directProductRow)
+      : [];
+    const submissionRows = page.map((row: any) => {
+      const product: any = row.productId ? productById.get(String(row.productId)) : undefined;
+      return present(row, {
+        imageUrl: urlById.get(row.mediaViews?.front || row.mediaIds?.[0]) || product?.images?.[0],
+        product: product ? stockView(product) : null,
+      });
+    });
+    const byNewest = (a: any, b: any) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
     return {
-      data: page.map((row: any) => {
-        const product: any = row.productId ? productById.get(String(row.productId)) : undefined;
-        return present(row, {
-          imageUrl: urlById.get(row.mediaViews?.front || row.mediaIds?.[0]) || product?.images?.[0],
-          product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED } : null,
-        });
-      }),
+      data: direct.length ? [...submissionRows, ...direct].sort(byNewest) : submissionRows,
       nextCursor: hasMore && page.length ? String((page[page.length - 1] as any)._id) : null,
       hasMore,
     };
@@ -240,7 +278,39 @@ export class VendorCatalogService {
     return { vendor, submission: submission as any };
   }
 
+  /** The detail page for a product Hook created directly: built from the product, shaped like a submission so one screen shows both. */
+  private async directProductDetail(vendorId: string, identifier: string) {
+    const product: any = await Product.findOne({ publicId: identifier.toUpperCase(), sourceMarketVendorId: vendorId, sourceSubmissionId: { $exists: false }, status: { $in: DIRECT_PRODUCT_STATUSES }, deletedAt: { $exists: false } }).lean({ virtuals: true });
+    if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+    const isId = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+    const [market, category]: any[] = await Promise.all([
+      isId(product.marketId) ? Market.findById(product.marketId).select('publicId').lean({ virtuals: true }) : null,
+      isId(product.categoryId) ? Category.findById(product.categoryId).select('publicId').lean({ virtuals: true }) : null,
+    ]);
+    const images: string[] = (product.images || []).slice(0, 12);
+    const media = images.map((url, index) => ({ publicId: `img-${index}`, status: 'ready', deliveryType: 'external', secureUrl: url, deliveryUrl: url }));
+    const colours: string[] = product.colors?.length ? product.colors : [''];
+    const sizes: string[] = product.sizes?.length ? product.sizes : [''];
+    const variants = colours.flatMap((colour) => sizes.map((size) => ({ size, colour, attributes: {}, active: true }))).filter((item) => item.size || item.colour);
+    return {
+      ...directProductRow(product),
+      marketId: market?.publicId || product.marketId,
+      categorySuggestionId: category?.publicId || product.categoryId,
+      notes: '',
+      mediaIds: media.map((item) => item.publicId),
+      mediaViews: { front: media[0]?.publicId, side: media[1]?.publicId, back: media[2]?.publicId },
+      media,
+      variants,
+      availabilityStatus: product.availabilityStatus === ProductAvailabilityStatus.LIMITED ? 'limited' : 'available',
+      availabilityNote: '',
+      captureChecklistConfirmed: true,
+      version: Number(product.catalogVersion || 1),
+    };
+  }
+
   async detail(accountId: string, identifier: string) {
+    // Product ids start with PRD-; a vendor's own submissions are SUB-.
+    if (/^PRD-/i.test(identifier)) return this.directProductDetail((await vendorFor(accountId))._id.toString(), identifier);
     const { submission } = await this.own(accountId, identifier, false);
     const media = await CatalogMediaAsset.find({
       $or: [{ publicId: { $in: submission.mediaIds } }, { _id: { $in: submission.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }],
@@ -259,7 +329,7 @@ export class VendorCatalogService {
       marketId: market?.publicId || submission.marketId,
       categorySuggestionId: categoryRecord?.publicId || submission.categorySuggestionId,
       media: media.map((asset: any) => ({ ...asset, deliveryUrl: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset) })),
-      product: product ? { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED } : null,
+      product: product ? stockView(product) : null,
     });
   }
 

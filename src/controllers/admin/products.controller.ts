@@ -290,6 +290,13 @@ export class AdminProductsController {
     const { category, market } = await activeCatalogRelations(req.body.categoryId, req.body.marketId);
     const body = { ...req.body };
     delete body.vendorId;
+    // The vendor who owns it must belong to this Market and be able to sign in, or they could never see or run the product.
+    const sourceMarketVendorId = await resolveSourceVendor(body.sourceMarketVendorId, market._id.toString());
+    delete body.sourceMarketVendorId;
+    if (sourceMarketVendorId) {
+      const owner: any = await MarketVendor.findById(sourceMarketVendorId).select('status').lean();
+      if (owner?.status !== 'active') throw new HttpError(409, 'This vendor is not active. Choose an active vendor.', undefined, 'CONFLICT');
+    }
     // Both identifiers come from the same reserved sequence: publicId is the durable internal key, hookId the human-facing alias.
     const productPublicId = await nextPublicId('product');
     const isPublished = body.status === ProductStatus.PUBLISHED;
@@ -322,6 +329,7 @@ export class AdminProductsController {
         commercialApproval: { approved: true, approvedBy: req.user!.sub, approvedAt: now },
       } : {}),
       source: 'admin',
+      ...(sourceMarketVendorId ? { sourceMarketVendorId } : {}),
       slug: `${slugify(req.body.title)}-${productPublicId.toLowerCase()}`,
       publicId: productPublicId,
       hookId: hookIdFromPublicId(productPublicId),
