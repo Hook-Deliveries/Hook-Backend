@@ -11,6 +11,7 @@ import { DeviceToken } from '@models/notifications/device-token.model';
 import { Notification } from '@models/notifications/notification.model';
 import { Order } from '@models/orders/order.model';
 import { User } from '@models/users/user.model';
+import { AccountSession } from '@models/platform/session.model';
 import { MarketVendor } from '@models/catalog/market-vendor.model';
 import { NotificationService } from '@modules/notifications';
 import { HttpError } from '@utils/http';
@@ -576,10 +577,27 @@ export class AuthService {
     return { message: 'Password changed successfully.' };
   }
 
-  async getProfile(userId: string) {
+  async getProfile(userId: string, sessionId?: string) {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new HttpError(404, 'User not found');
-    return presentAccountUser(user);
+    // A vendor on the default password may have chosen to keep it for this sign-in; a new sign-in asks again.
+    const kept = sessionId && user.mustChangePassword ? Boolean((await AccountSession.findById(sessionId).select('defaultPasswordKeptAt').lean())?.defaultPasswordKeptAt) : false;
+    return presentAccountUser(user, { defaultPasswordKept: kept });
+  }
+
+  /**
+   * A vendor on the default password may keep using it instead of choosing their own, for this sign-in only. The choice
+   * sits on the session, so signing in again (or on another device) brings the question back.
+   */
+  async keepDefaultPassword(userId: string, sessionId?: string) {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) throw new HttpError(404, 'User not found');
+    if (user.accountType !== AccountType.VENDOR || !user.mustChangePassword) {
+      throw new HttpError(400, 'This account is not using a default password', undefined, 'VALIDATION_ERROR');
+    }
+    if (!sessionId) throw new HttpError(401, 'Sign in again to continue', undefined, 'TOKEN_INVALID');
+    await AccountSession.updateOne({ _id: sessionId, accountId: userId }, { $set: { defaultPasswordKeptAt: new Date() } });
+    return presentAccountUser(user, { defaultPasswordKept: true });
   }
 
   /**

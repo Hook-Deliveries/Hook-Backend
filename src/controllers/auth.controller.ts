@@ -69,7 +69,7 @@ export class AuthController {
   };
 
   profile = async (req: Request, res: Response) => {
-    sendSuccess(res, await this.auth.getProfile(req.user!.sub));
+    sendSuccess(res, await this.auth.getProfile(req.user!.sub, req.user!.sid));
   };
 
   updateProfile = async (req: Request, res: Response) => {
@@ -126,6 +126,10 @@ export class AuthController {
 
   resetAdminPassword = async (req: Request, res: Response) => {
     sendSuccess(res, await this.auth.resetAdminPassword(req.body.email, req.body.code, req.body.password));
+  };
+
+  keepDefaultPassword = async (req: Request, res: Response) => {
+    sendSuccess(res, await this.auth.keepDefaultPassword(req.user!.sub, req.user!.sid));
   };
 
   changePassword = async (req: Request, res: Response) => {

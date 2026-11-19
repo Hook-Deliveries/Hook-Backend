@@ -16,6 +16,8 @@ export interface AccountSession extends BaseEntity {
   revokedAt?: Date;
   revokedBy?: string;
   revocationReason?: string;
+  /** A vendor chose to keep the default password for this sign-in. Each new sign-in starts without it, so they are asked again. */
+  defaultPasswordKeptAt?: Date;
 }
 
 const schema = createSchema<AccountSession>({
@@ -33,6 +35,7 @@ const schema = createSchema<AccountSession>({
   revokedAt: { type: Date, index: true },
   revokedBy: { type: String },
   revocationReason: { type: String },
+  defaultPasswordKeptAt: { type: Date },
 });
 
 schema.index({ accountId: 1, revokedAt: 1, expiresAt: 1 });

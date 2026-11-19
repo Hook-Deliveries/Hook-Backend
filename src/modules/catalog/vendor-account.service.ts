@@ -6,7 +6,7 @@ import { revokeAccountSessions } from '@modules/identity';
 import { nextPublicId } from '@modules/platform';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
 
-/** Every new vendor account starts here and is forced to choose its own password at first sign-in. */
+/** Every new vendor account starts here. They are asked at each sign-in to choose their own, and may keep this one for now. */
 export const DEFAULT_VENDOR_PASSWORD = '123456';
 
 function splitName(name: string) {
@@ -15,7 +15,7 @@ function splitName(name: string) {
 }
 
 /**
- * Gives a vendor a login: a User of type vendor with the default password and a forced change. Idempotent, so
+ * Gives a vendor a login: a User of type vendor on the default password, which they may keep or replace. Idempotent, so
  * onboarding, the backfill script and "reset password" can all call it. Vendors are verified from the start.
  */
 export async function provisionVendorAccount(vendor: any, options: { resetPassword?: boolean } = {}) {

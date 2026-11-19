@@ -405,8 +405,13 @@ export class AdminProductsController {
     if (priceFieldsChanged && !String(req.body.reason || '').trim())
       throw new HttpError(400, 'A reason is required when changing product pricing', undefined, 'VALIDATION_ERROR');
     const before = { quantity: product.quantity, sellingPriceMinor: product.sellingPriceMinor };
+    const titleBefore = product.title;
     Object.assign(product, updates);
-    if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
+    // The link follows the name only when the name really changed, and always keeps the product's id on the end, so a
+    // saved or shared link to an earlier version of the name still finds it. Re-saving the same title changes nothing.
+    if (req.body.title && !req.body.slug && String(req.body.title).trim() !== String(titleBefore || '').trim()) {
+      product.slug = `${slugify(req.body.title)}-${String(product.publicId || product.id).toLowerCase()}`;
+    }
     await products.save(product);
     await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body), reason: req.body.reason });
     publishProductUpdate(product);

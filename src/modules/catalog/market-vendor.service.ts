@@ -279,21 +279,41 @@ export class MarketVendorService {
       throw error;
     }
 
-    // Vendors are verified from the start and get a login straight away, with a default password they must change.
-    await provisionVendorAccount(vendor);
+    // Vendors are verified from the start and get a login straight away, on a default password they can keep or replace.
+    try {
+      await provisionVendorAccount(vendor);
+    } catch (error) {
+      // No login means no vendor: removing the record lets the same details be added again once the clash is fixed,
+      // instead of failing forever as "already tracked".
+      await MarketVendor.deleteOne({ _id: vendor._id }).catch(() => undefined);
+      throw error;
+    }
     const delivery = await this.sendVendorWelcome(vendor, market.name);
     return { vendor: safeVendor(vendor), delivery };
   }
 
-  private async sendVendorWelcome(vendor: any, marketName: string, reset = false) {
+  /**
+   * `new`: a first welcome with the default password. `reset`: the default password was set again. `existing`: the vendor
+   * already chose their own password, so nothing is changed and the email only shows where to sign in.
+   */
+  private async sendVendorWelcome(vendor: any, marketName: string, mode: 'new' | 'reset' | 'existing' = 'new') {
     const loginUrl = `${await adminAppBaseUrl()}/auth/login`;
-    const intro = reset ? 'Your Hook vendor password was reset.' : `${vendor.businessName} has been added to Hook in ${marketName}, and your vendor account is ready.`;
-    const body = `Sign in at ${loginUrl} with ${vendor.email} and the temporary password ${DEFAULT_VENDOR_PASSWORD}. You will be asked to choose your own password straight away.`;
+    const intro = mode === 'existing'
+      ? `Here are your Hook vendor sign-in details for ${marketName}.`
+      : mode === 'reset'
+        ? 'Your Hook vendor password was reset.'
+        : `${vendor.businessName} has been added to Hook in ${marketName}, and your vendor account is ready.`;
+    const steps = mode === 'existing'
+      ? `Sign in at ${loginUrl} with ${vendor.email} and the password you chose. If you have forgotten it, use "Forgot password" on the sign-in page.`
+      : `Sign in at ${loginUrl} with ${vendor.email} and the temporary password ${DEFAULT_VENDOR_PASSWORD}. You can choose your own password at any time. Until you do, Hook will ask you each time you sign in whether to keep the temporary one.`;
+    const html = mode === 'existing'
+      ? `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the password you chose. If you have forgotten it, use <em>Forgot password</em> on the sign-in page.</p>`
+      : `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the temporary password <strong>${DEFAULT_VENDOR_PASSWORD}</strong>.</p><p>You can choose your own password at any time. Until you do, Hook will ask you each time you sign in whether you want to keep the temporary one. We recommend choosing your own, because anyone who knows your email could use the temporary password.</p>`;
     return email.send({
       to: vendor.email,
-      subject: reset ? 'Your Hook vendor password was reset' : `Your Hook vendor account for ${marketName}`,
-      html: `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the temporary password <strong>${DEFAULT_VENDOR_PASSWORD}</strong>. You will be asked to choose your own password straight away.</p>`,
-      text: `${intro} ${body}`,
+      subject: mode === 'reset' ? 'Your Hook vendor password was reset' : mode === 'existing' ? `Your Hook vendor sign-in for ${marketName}` : `Your Hook vendor account for ${marketName}`,
+      html,
+      text: `${intro} ${steps}`,
     }).catch(() => ({ delivered: false, provider: 'none' }));
   }
 
@@ -414,12 +434,15 @@ export class MarketVendorService {
       status: 'pending',
       expiresAt,
     });
-    // Re-inviting a vendor resets them to the default password and sends the sign-in details again.
+    // Re-inviting sends the sign-in details again. A vendor still on the default password gets it set again; one who chose
+    // their own password keeps it, so an invite can never lock them out of their own shop.
     const inviteUrl = `${await adminAppBaseUrl()}/auth/login`;
     if (vendor.email) {
-      await provisionVendorAccount(vendor, { resetPassword: true });
+      const current: any = vendor.accountId ? await User.findById(vendor.accountId).select('mustChangePassword').lean() : null;
+      const hasOwnPassword = Boolean(current) && !current.mustChangePassword;
+      await provisionVendorAccount(vendor, { resetPassword: !hasOwnPassword });
       const market = await Market.findById(vendor.marketId).select('name').lean();
-      const delivery: any = await this.sendVendorWelcome(vendor, market?.name || 'your market', true);
+      const delivery: any = await this.sendVendorWelcome(vendor, market?.name || 'your market', hasOwnPassword ? 'existing' : 'reset');
       if (delivery?.delivered) await VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } });
     }
     return { publicId: invitation.publicId, expiresAt, inviteUrl, email: vendor.email || null };

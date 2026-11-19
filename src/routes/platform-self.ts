@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
-import { requireAccountType, requireAuth, requirePasswordChanged } from "@middleware/auth";
+import { requireAccountType, requireAuth, requireOwnPassword, requirePasswordChanged } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
 import { withIdempotency } from '@middleware/idempotency';
 import {
@@ -452,7 +452,7 @@ export function createVendorRouter() {
   router.get("/dashboard", asyncHandler(async (req, res) => sendSuccess(res, await catalog.dashboard(req.user!.sub))));
   router.get("/profile", asyncHandler(async (req, res) => sendSuccess(res, await catalog.profile(req.user!.sub))));
   router.patch("/profile", validateBody(vendorProfileSchema), asyncHandler(async (req, res) => sendSuccess(res, await catalog.updateProfile(req.user!.sub, req.body))));
-  router.patch("/payment-profile", validateBody(vendorPaymentSchema), asyncHandler(async (req, res) => {
+  router.patch("/payment-profile", requireOwnPassword, validateBody(vendorPaymentSchema), asyncHandler(async (req, res) => {
     const result = await catalog.updatePayment(req.user!.sub, req.body);
     await recordAudit(req, { action: "vendor.payment_profile.updated", entityType: "market_vendor", entityId: result.vendor.publicId, entityPublicId: result.vendor.publicId, after: { method: req.body.method } });
     sendSuccess(res, result);
