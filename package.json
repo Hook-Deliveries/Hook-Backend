@@ -47,6 +47,7 @@
     "db:migrate-market-fulfilment": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/migrate-market-fulfilment.ts",
     "db:backfill-group-statuses": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-group-statuses.ts",
     "db:seed-earn-settings": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/seed-earn-settings.ts",
+    "db:backfill-payment-verified": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-payment-verified.ts",
     "db:backfill-vendor-accounts": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-vendor-accounts.ts",
     "db:backfill-permissions": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/backfill-permissions.ts",
     "db:verify-indexes": "node -r ts-node/register/transpile-only -r tsconfig-paths/register src/database/scripts/verify-indexes.ts",
