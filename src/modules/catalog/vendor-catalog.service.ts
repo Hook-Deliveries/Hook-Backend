@@ -1,7 +1,9 @@
 import { ProductAvailabilityStatus, ProductStatus, ProductSubmissionStatus } from '@lib/constants';
 import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
 import { CatalogMediaAsset, ProductSubmission, type SubmissionVariant } from '@models/catalog/catalog.model';
-import { MarketVendor } from '@models/catalog/market-vendor.model';
+import { MarketVendor, VendorCollection, VendorPaymentRecord } from '@models/catalog/market-vendor.model';
+import { Order } from '@models/orders/order.model';
+import { OrderItem } from '@models/orders/order-item.model';
 import { Product } from '@models/products/product.model';
 import { Market } from '@models/platform/network.model';
 import { Category } from '@models/categories/category.model';
@@ -154,8 +156,8 @@ export class VendorCatalogService {
   }
 
   /**
-   * How Hook pays this vendor. Bank details are sensitive, so changing them needs the account password, they go back
-   * to "pending" until Hook staff check them, and the vendor is told it happened.
+   * How Hook pays this vendor. Bank details are sensitive, so changing them needs the account password and the vendor is
+   * told it happened. They are verified straight away, like the vendor themselves.
    */
   async updatePayment(accountId: string, input: { method: 'cash' | 'bank_transfer' | 'other'; bankName?: string; bankCode?: string; accountName?: string; accountNumber?: string; password: string }) {
     const vendor = await vendorFor(accountId);
@@ -176,8 +178,8 @@ export class VendorCatalogService {
       next.accountName = input.accountName.trim();
       next.accountNumberEncrypted = accountNumber ? encryptVendorAccountNumber(accountNumber) : current.accountNumberEncrypted;
       next.accountNumberLast4 = accountNumber ? accountNumber.slice(-4) : current.accountNumberLast4;
-      const changed = Boolean(accountNumber) || next.bankName !== current.bankName || next.accountName !== current.accountName;
-      next.verificationStatus = changed || current.method !== 'bank_transfer' ? 'pending' : current.verificationStatus || 'pending';
+      // Vendors are verified when they join and changing details already needs their password, so a saved bank account counts as verified.
+      next.verificationStatus = 'verified';
     } else {
       // Cash and other methods carry no account details, so any saved ones are cleared rather than left behind.
       next.verificationStatus = 'unverified';
@@ -187,11 +189,89 @@ export class VendorCatalogService {
       eventKey: `vendor:${vendor.publicId}:payment-updated:${Date.now()}`,
       userId: accountId,
       title: 'Payout details updated',
-      body: input.method === 'bank_transfer' ? 'Your bank details were changed. Hook will verify them before the next payout.' : 'Your payout method was changed.',
+      body: input.method === 'bank_transfer' ? 'Your bank details were updated and are ready for your next payout.' : 'Your payout method was changed.',
       type: 'catalog_availability',
       data: { vendorId: vendor.publicId },
     }).catch(() => undefined);
     return this.profile(accountId);
+  }
+
+  /** What Hook collected from this vendor and what it has paid, newest first, with the running totals. */
+  async payouts(accountId: string, query: Record<string, unknown>) {
+    const vendor = await vendorFor(accountId);
+    const vendorId = vendor._id.toString();
+    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
+    const filter: Record<string, any> = { marketVendorId: vendorId, status: { $ne: 'cancelled' }, deletedAt: { $exists: false } };
+    if (query.cursor) filter._id = { $lt: query.cursor };
+    const [rows, payments] = await Promise.all([
+      VendorCollection.find(filter).sort({ _id: -1 }).limit(limit + 1).lean({ virtuals: true }),
+      VendorPaymentRecord.find({ marketVendorId: vendorId, deletedAt: { $exists: false } }).lean({ virtuals: true }),
+    ]);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit) as any[];
+    const paymentByCollection = new Map<string, any>((payments as any[]).map((payment) => [String(payment.collectionId), payment]));
+    const totals = await VendorCollection.aggregate([
+      { $match: { marketVendorId: vendorId, status: 'collected', deletedAt: { $exists: false } } },
+      { $group: { _id: null, collected: { $sum: '$actualCostMinor' }, count: { $sum: 1 } } },
+    ]);
+    const paid = (payments as any[]).filter((payment) => ['recorded', 'reconciled'].includes(payment.status)).reduce((sum, payment) => sum + (payment.amountMinor || 0), 0);
+    const collected = totals[0]?.collected || 0;
+    return {
+      summary: { collectedMinor: collected, paidMinor: paid, outstandingMinor: Math.max(collected - paid, 0), pickups: totals[0]?.count || 0, currency: 'NGN' },
+      data: page.map((row) => {
+        const payment = paymentByCollection.get(String(row._id));
+        return {
+          publicId: row.publicId,
+          productTitle: row.productTitleSnapshot,
+          quantity: row.quantity,
+          amountMinor: row.actualCostMinor,
+          currency: row.currency || 'NGN',
+          status: row.status,
+          paymentStatus: payment?.status || row.paymentStatus || 'unpaid',
+          collectedAt: row.collectedAt || row.createdAt,
+          payment: payment ? { method: payment.method, status: payment.status, reference: payment.reference || null, paidAt: payment.recordedAt || null, reconciledAt: payment.reconciledAt || null } : null,
+        };
+      }),
+      nextCursor: hasMore && page.length ? String(page[page.length - 1]._id) : null,
+      hasMore,
+    };
+  }
+
+  /** Paid orders that include this vendor's products. Read-only, and never shows who bought them or where it goes. */
+  async orders(accountId: string, query: Record<string, unknown>) {
+    const vendor = await vendorFor(accountId);
+    const products: any[] = await Product.find({ sourceMarketVendorId: vendor._id.toString(), deletedAt: { $exists: false } }).select('_id publicId').lean();
+    if (!products.length) return { data: [], nextCursor: null, hasMore: false, summary: { items: 0, units: 0 } };
+    const productIds = products.flatMap((product) => [String(product._id), product.publicId]).filter(Boolean);
+    const limit = Math.min(Math.max(Number(query.limit || 25), 1), 60);
+    const itemFilter: Record<string, any> = { productId: { $in: productIds } };
+    if (query.cursor) itemFilter._id = { $lt: query.cursor };
+    const items: any[] = await OrderItem.find(itemFilter).sort({ _id: -1 }).limit((limit + 1) * 2).lean({ virtuals: true });
+    const orders: any[] = await Order.find({ _id: { $in: items.map((item) => item.orderId).filter((id) => /^[a-f\d]{24}$/i.test(String(id))) }, commercePaymentStatus: 'CONFIRMED' }).select('_id commerceStatus createdAt').lean();
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+    const paidItems = items.filter((item) => orderById.has(String(item.orderId)));
+    const hasMore = paidItems.length > limit;
+    const page = paidItems.slice(0, limit);
+    return {
+      summary: { items: paidItems.length, units: paidItems.reduce((sum, item) => sum + (item.quantity || 0), 0) },
+      data: page.map((item) => {
+        const order = orderById.get(String(item.orderId));
+        const delivered = item.deliveryStatus === 'DELIVERED' || item.deliveryStatus === 'COLLECTED' || item.deliveryStatus === 'RESOLVED';
+        const stage = item.fulfilmentStatus === 'EXCEPTION' ? 'issue' : item.fulfilmentStatus === 'REFUNDED' ? 'refunded' : delivered ? 'delivered' : item.deliveryStatus === 'IN_TRANSIT' ? 'on_the_way' : item.fulfilmentStatus === 'COMPLETED' || item.fulfilmentStatus === 'QC_PASSED' || item.fulfilmentStatus === 'PACKED' ? 'packed' : 'being_sourced';
+        return {
+          reference: item.publicId || String(item._id).slice(-8).toUpperCase(),
+          productTitle: item.productTitle,
+          productImage: item.productImage || null,
+          quantity: item.quantity,
+          options: item.selectedVariants || {},
+          stage,
+          orderedAt: order?.createdAt || item.createdAt,
+          deliveredAt: item.deliveredAt || null,
+        };
+      }),
+      nextCursor: hasMore && page.length ? String((page[page.length - 1] as any)._id) : null,
+      hasMore,
+    };
   }
 
   async dashboard(accountId: string) {

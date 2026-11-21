@@ -598,6 +598,9 @@ export class CatalogReviewService {
       return found ? String(found._id) : '000000000000000000000000';
     };
     if (query.marketId) filter.marketId = await internal(query.marketId, Market as never);
+    // Who captured it. Older submissions have no createdBy and were all captured by Market Associates.
+    if (query.createdBy === 'vendor') filter.createdBy = 'vendor';
+    else if (query.createdBy === 'market_associate') filter.createdBy = { $ne: 'vendor' };
     if (query.marketAssociateId) filter.marketAssociateId = await internal(query.marketAssociateId, MarketAssociateProfile as never);
     if (query.categoryId) filter.categorySuggestionId = { $in: await categoryService.descendantIds(String(query.categoryId)) };
     if (query.cursor) {

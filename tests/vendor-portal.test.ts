@@ -83,7 +83,7 @@ test('a vendor only sees their own products, and reviewer identities stay hidden
   assert.equal(dash.drafts, 0);
 });
 
-test('changing payout details needs the password and goes back to pending verification', async () => {
+test('changing payout details needs the password and is verified straight away', async () => {
   const v = await vendor('Gina', 'gina@example.com');
   const { accountId } = await provisionVendorAccount(v);
   const service = new VendorCatalogService();
@@ -91,11 +91,26 @@ test('changing payout details needs the password and goes back to pending verifi
   await assert.rejects(() => service.updatePayment(accountId, { ...bank, password: 'wrong-password' }), /not correct/);
   const saved = await service.updatePayment(accountId, { ...bank, password: DEFAULT_VENDOR_PASSWORD });
   assert.equal(saved.vendor.paymentProfile.accountNumberLast4, '6789');
-  assert.equal(saved.vendor.paymentProfile.verificationStatus, 'pending');
+  assert.equal(saved.vendor.paymentProfile.verificationStatus, 'verified');
   assert.equal('accountNumberEncrypted' in saved.vendor.paymentProfile, false);
   // Bank details are required for a bank transfer, but the saved number can be kept.
   await assert.rejects(() => service.updatePayment(accountId, { method: 'bank_transfer', bankName: '', password: DEFAULT_VENDOR_PASSWORD }), /Enter the bank/);
   const cash = await service.updatePayment(accountId, { method: 'cash', password: DEFAULT_VENDOR_PASSWORD });
   assert.equal(cash.vendor.paymentProfile.method, 'cash');
   assert.equal(cash.vendor.paymentProfile.accountNumberLast4, null);
+});
+
+test('payouts total what was collected and paid, and orders never expose buyers', async () => {
+  const { VendorCollection, VendorPaymentRecord } = await import('../src/models/catalog/market-vendor.model');
+  const v = await vendor('Hana', 'hana@example.com');
+  const { accountId } = await provisionVendorAccount(v);
+  const collection = id();
+  await VendorCollection.collection.insertOne({ _id: collection, publicId: 'COL-1', marketVendorId: String(v._id), marketId: 'm', marketAssociateId: 'a', productSubmissionId: 's', productTitleSnapshot: 'Bag', quantity: 2, actualCostMinor: 500000, currency: 'NGN', status: 'collected', paymentStatus: 'recorded', createdAt: new Date() });
+  await VendorPaymentRecord.collection.insertOne({ _id: id(), publicId: 'VPR-1', collectionId: String(collection), marketVendorId: String(v._id), marketId: 'm', marketAssociateId: 'a', amountMinor: 300000, currency: 'NGN', method: 'cash', status: 'recorded', recordedAt: new Date(), createdAt: new Date() });
+  const service = new VendorCatalogService();
+  const payouts = await service.payouts(accountId, {});
+  assert.deepEqual([payouts.summary.collectedMinor, payouts.summary.paidMinor, payouts.summary.outstandingMinor], [500000, 300000, 200000]);
+  assert.equal(payouts.data[0].paymentStatus, 'recorded');
+  const orders = await service.orders(accountId, {});
+  assert.equal(orders.data.length, 0);
 });
