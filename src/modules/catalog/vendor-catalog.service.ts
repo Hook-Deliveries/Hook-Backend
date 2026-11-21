@@ -182,7 +182,7 @@ export class VendorCatalogService {
       next.verificationStatus = 'verified';
     } else {
       // Cash and other methods carry no account details, so any saved ones are cleared rather than left behind.
-      next.verificationStatus = 'unverified';
+      next.verificationStatus = 'verified';
     }
     await MarketVendor.updateOne({ _id: vendor._id }, { $set: { paymentProfile: next } });
     await createCommerceNotification({

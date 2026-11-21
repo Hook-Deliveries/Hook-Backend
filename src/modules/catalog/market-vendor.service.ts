@@ -110,7 +110,8 @@ function paymentProfile(input: any): VendorPaymentProfile | undefined {
     accountName: input.accountName?.trim() || undefined,
     accountNumberEncrypted: accountNumber ? encryptVendorAccountNumber(accountNumber) : undefined,
     accountNumberLast4: accountNumber ? accountNumber.slice(-4) : undefined,
-    verificationStatus: 'unverified',
+    // Payout details are verified when saved: vendors are verified on joining and Hook has no separate bank check.
+    verificationStatus: 'verified',
     updatedAt: new Date(),
   };
 }
