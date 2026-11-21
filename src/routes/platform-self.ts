@@ -457,6 +457,8 @@ export function createVendorRouter() {
     await recordAudit(req, { action: "vendor.payment_profile.updated", entityType: "market_vendor", entityId: result.vendor.publicId, entityPublicId: result.vendor.publicId, after: { method: req.body.method } });
     sendSuccess(res, result);
   }));
+  router.get("/payouts", asyncHandler(async (req, res) => sendSuccess(res, await catalog.payouts(req.user!.sub, req.query))));
+  router.get("/orders", asyncHandler(async (req, res) => sendSuccess(res, await catalog.orders(req.user!.sub, req.query))));
   router.get("/product-submissions", asyncHandler(async (req, res) => sendSuccess(res, await catalog.list(req.user!.sub, req.query))));
   router.post("/product-submissions", validateBody(marketAssociateSubmissionDraftSchema), asyncHandler(async (req, res) => {
     const created = await catalog.create(req.user!.sub, req.body);

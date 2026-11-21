@@ -2471,7 +2471,9 @@ export class FulfilmentService {
     const completedAt = order.deliveredAt || order.fulfilmentCompletedAt;
     if (!completedStatuses.includes(order.commerceStatus) || !completedAt || Date.now() - new Date(completedAt).getTime() > 24 * 60 * 60 * 1000) throw new HttpError(409, 'Return requests must be reported within 24 hours of delivery or collection', undefined, 'RETURN_WINDOW_CLOSED');
     const itemIds = Array.isArray(body.orderItemIds) ? body.orderItemIds : [];
-    const items = await OrderItem.find({ orderId: order._id.toString(), _id: { $in: itemIds } }).lean() as any[];
+    // The shop sends the items' public ids; the apps send internal ones. Either is accepted.
+    const internalIds = itemIds.filter((value: unknown) => /^[a-f\d]{24}$/i.test(String(value)));
+    const items = await OrderItem.find({ orderId: order._id.toString(), $or: [{ _id: { $in: internalIds } }, { publicId: { $in: itemIds.map(String) } }] }).lean() as any[];
     if (!items.length || items.some((item) => ['REFUNDED', 'CANCELLED'].includes(String(item.fulfilmentStatus || '').toUpperCase()))) throw new HttpError(400, 'Select at least one eligible delivered item', undefined, 'VALIDATION_ERROR');
     const record = await ReturnRequest.create({ publicId: await nextPublicId('returnRequest'), orderId: order._id.toString(), orderItemIds: items.map((item: any) => item._id.toString()), requestedBy: actor.accountId, reasonType: body.reasonType, reason: body.reason, evidenceAssetIds: body.evidenceAssetIds || [], status: 'REQUESTED', reportedAt: new Date() });
     await Order.updateOne({ _id: order._id }, { $set: { commerceStatus: CommerceOrderStatus.RETURN_IN_PROGRESS }, $push: { timeline: timelineEntry('RETURN_REQUESTED', actor.accountId) } });

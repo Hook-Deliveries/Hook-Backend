@@ -15,7 +15,7 @@ import { Order } from '@models/orders/order.model';
 import { Product } from '@models/products/product.model';
 import { Payment } from '@models/payments/payment.model';
 import { OrderFulfilmentGroup } from '@models/orders/order-fulfilment-group.model';
-import { Shipment } from '@models/fulfilment/fulfilment.model';
+import { Shipment, ReturnRequest } from '@models/fulfilment/fulfilment.model';
 import { ItemResolution } from '@models/fulfilment/item-resolution.model';
 import { User } from '@models/users/user.model';
 import { CustomerOwner } from '@modules/orders/cart.service';
@@ -320,7 +320,7 @@ export class OrderService {
     const identifier = id.match(/^[a-f\d]{24}$/i) ? { $or: [{ _id: id }, { publicId: id }, { orderCode: id }] } : { $or: [{ publicId: id }, { orderCode: id }] };
     const order = await Order.findOne({ ...identifier, ...this.ownerWhere(owner) }).lean({ virtuals: true });
     if (!order) throw new HttpError(404, 'Order not found');
-    const [items, payments, fulfilmentGroups, shipments, substitutions] = await Promise.all([
+    const [items, payments, fulfilmentGroups, shipments, substitutions, returnRequests] = await Promise.all([
       OrderItem.find({ orderId: order.id }).lean({ virtuals: true }),
       Payment.find({ orderId: order.id }).select('-gatewayResponse -authorizationUrl -accessCode').lean({ virtuals: true }),
       OrderFulfilmentGroup.find({ orderId: order.id }).sort({ createdAt: 1 }).lean({ virtuals: true }),
@@ -329,6 +329,7 @@ export class OrderService {
       // customer should see why an item is being worked on as soon as it's reported,
       // not only once staff have proposed a replacement.
       ItemResolution.find({ orderId: order.id, ...(order.userId ? { customerId: order.userId } : {}), status: { $in: ['OPEN', 'ADMIN_REVIEW', 'CUSTOMER_APPROVAL_PENDING', 'PAYMENT_PENDING', 'REFUND_PENDING', 'DECLINED', 'RESOLVED'] } }).sort({ createdAt: -1 }).lean({ virtuals: true }),
+      ReturnRequest.find({ orderId: String(order._id || order.id) }).sort({ createdAt: -1 }).lean({ virtuals: true }),
     ]);
     const subtotalMinor = Number(order.subtotalMinor ?? Math.round(Number(order.subtotal || 0) * 100));
     const vatMinor = Number(order.vatMinor || 0);
@@ -417,6 +418,14 @@ export class OrderService {
       timeline: timelineFor(order, primaryShipment),
       deliveries,
       substitutions: substitutions.map((entry: any) => ({ id: entry.publicId || entry.id, version: entry.version, status: entry.status, type: entry.type, summary: entry.summary, original: entry.originalSnapshot, proposal: entry.proposal, adjustmentMinor: entry.adjustmentMinor, adjustmentStatus: entry.adjustmentStatus, adjustmentAuthorizationUrl: entry.adjustmentAuthorizationUrl, customerDecision: entry.customerDecision })),
+      returns: (returnRequests as any[]).map((entry) => ({ id: entry.publicId, status: entry.status, reasonType: entry.reasonType, reason: entry.reason, decisionNote: entry.decisionNote, handoverDueAt: entry.handoverDueAt, reportedAt: entry.reportedAt || entry.createdAt, itemIds: (entry.orderItemIds || []).map(String) })),
+      // A return can be reported for 24 hours after delivery or collection (the same rule the request itself enforces).
+      returnClosesAt: (() => {
+        const completedAt = (order as any).deliveredAt || (order as any).fulfilmentCompletedAt;
+        return ['DELIVERED', 'COLLECTED', 'COMPLETED'].includes(String(order.commerceStatus).toUpperCase()) && completedAt
+          ? new Date(new Date(completedAt).getTime() + 24 * 60 * 60 * 1000)
+          : undefined;
+      })(),
       canCancel: ['PENDING', 'AWAITING_PAYMENT'].includes(String(order.commerceStatus || order.status).toUpperCase())
         && !['CONFIRMED', 'PAID'].includes(String(order.commercePaymentStatus || order.paymentStatus).toUpperCase()),
     } as any;
