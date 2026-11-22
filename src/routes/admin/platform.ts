@@ -37,7 +37,7 @@ const citySchema = z.object({
 const marketSchema = z.object({
   name: z.string().trim().min(2).max(150),
   stateId: z.string().min(1),
-  cityId: z.string().min(1),
+  cityId: z.string().min(1).optional(),
   zoneId: z.string().optional(),
   hubId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
@@ -55,7 +55,7 @@ const marketSchema = z.object({
 const hubSchema = z.object({
   name: z.string().trim().min(2).max(150),
   stateId: z.string().min(1),
-  cityId: z.string().min(1),
+  cityId: z.string().min(1).optional(),
   zoneIds: idList,
   address: z.string().trim().min(5).max(500),
   coordinates,
@@ -96,7 +96,7 @@ const partnerSchema = z.object({
   ...person,
   name: z.string().trim().min(2).max(150),
   stateId: z.string().min(1),
-  cityId: z.string().min(1),
+  cityId: z.string().min(1).optional(),
   zoneId: z.string().optional(),
   marketId: z.string().optional(),
   address: z.string().trim().min(5).max(500),
