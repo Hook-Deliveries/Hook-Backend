@@ -24,7 +24,23 @@ export function createDeviceRouter() {
   router.post('/test-push', asyncHandler(controller.testPush));
 
   // Browser push for shoppers: the same Web Push (VAPID) delivery the staff portals use, keyed to the customer account.
-  const webPushSchema = z.object({ endpoint: z.string().url(), keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }) });
+  const webPushSchema = z.object({
+    endpoint: z.string().max(4096).refine((value) => {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.port || url.username || url.password) return false;
+      const { hostname } = url;
+      // Accept browser push services because delivery makes an outbound request to this URL.
+      return hostname === 'fcm.googleapis.com'
+        || hostname === 'updates.push.services.mozilla.com'
+        || hostname.endsWith('.push.apple.com')
+        || hostname.endsWith('.notify.windows.com');
+    }, 'Unsupported browser push endpoint'),
+    keys: z.object({
+      p256dh: z.string().regex(/^[A-Za-z0-9_-]{87}=?$/),
+      auth: z.string().regex(/^[A-Za-z0-9_-]{22}={0,2}$/),
+    }),
+  });
   router.post('/web-push', validateBody(webPushSchema), asyncHandler(async (req, res) => {
     await WebPushSubscription.findOneAndUpdate(
       { endpoint: req.body.endpoint },
