@@ -183,6 +183,12 @@ export function fallbackPhrase(
       ? `${price} fit work. Take am now, or try go lower. You get ${left} left.`
       : `${price} works for me. Take it now, or try for a lower price. You have ${left} left.`;
   }
+  if (decision.decision === 'COUNTER' && price && context.finalized) {
+    // The last counter closes the negotiation at Hook's best price, so it is offered as a deal, not a question.
+    return pidgin
+      ? `Oya, for you, ${price} na the price I fit give. E dey locked for ${minutes} minutes. Add am to cart before time finish.`
+      : `For you, I can do ${price}. It is locked for ${minutes} minutes, so add it to your cart before the time runs out.`;
+  }
   if (decision.decision === 'COUNTER' && price) {
     return pidgin
       ? `Na ${price} be the best I fit do now. Abeg add small. You get ${left} left.`
@@ -190,12 +196,12 @@ export function fallbackPhrase(
   }
   if (price && context.finalized) {
     return pidgin
-      ? `I no fit go lower than ${price} for this one. E dey locked for ${minutes} minutes if you want am.`
-      : `I can't go lower than ${price} on this one. It is locked for ${minutes} minutes if you want it.`;
+      ? `${price} na the price wey I get for you. E dey locked for ${minutes} minutes if you want am.`
+      : `${price} is the price I have for you. It is locked for ${minutes} minutes if you want it.`;
   }
   return pidgin
-    ? 'I no fit go that low for this one. Thank you for trying!'
-    : "I can't go that low on this one. Thanks for trying!";
+    ? 'No wahala, we fit try another time. Thank you for trying!'
+    : 'No problem, we can try again another time. Thanks for trying!';
 }
 
 /** Accepts the model's picks only if they are exactly three distinct known candidates with clean, price-free notes. */
@@ -382,7 +388,7 @@ async phrase(decision: PricingDecision, context: { customerMessage?: string; lan
       const messages: ChatCompletionMessageParam[] = [
           {
             role: 'system',
-            content: `Continue this Hook negotiation as a persuasive but respectful Nigerian market seller in ${context.language === 'pidgin' ? 'Nigerian Pidgin English' : 'clear English'}. Use the recent conversation and avoid repeated wording. Use exactly the supplied financial decision, approved price, remaining-offer count, and finalization state. Mention only the approved price; never suggest, compare, or invent another monetary amount. Prices are per item. When itemCount is more than 1, state the TOTAL for all items as the main figure (for example ₦90,000 for both) and you may add the per-item price in brackets; those are the only two amounts you may mention. Defend the product's value using only the exact supplied title and description. Do not invent quality, durability, material, popularity, scarcity, or performance claims. For COUNTER, never imply the customer's price was accepted: clearly state Hook's approved counter and encourage a meaningful increase. For DECLINE, do not imply acceptance. Only ACCEPT may say the customer's offer works. ${context.playfulLowOffer ? 'React to the very low offer with warm market banter, never an insult.' : ''} If offers remain after ACCEPT, say the customer may try for a lower price. If finalized, say the best price is locked. Never reveal internal pricing information. Return JSON with exactly message and decision fields.`,
+            content: `Continue this Hook negotiation as a persuasive but respectful Nigerian market seller in ${context.language === 'pidgin' ? 'Nigerian Pidgin English' : 'clear English'}. Use the recent conversation and avoid repeated wording. Use exactly the supplied financial decision, approved price, remaining-offer count, and finalization state. Mention only the approved price; never suggest, compare, or invent another monetary amount. Prices are per item. When itemCount is more than 1, state the TOTAL for all items as the main figure (for example ₦90,000 for both) and you may add the per-item price in brackets; those are the only two amounts you may mention. Defend the product's value using only the exact supplied title and description. Do not invent quality, durability, material, popularity, scarcity, or performance claims. For COUNTER, never imply the customer's price was accepted: clearly state Hook's approved counter and encourage a meaningful increase. For DECLINE, do not imply acceptance. Only ACCEPT may say the customer's offer works. ${context.playfulLowOffer ? 'React to the very low offer with warm market banter, never an insult.' : ''} If offers remain after ACCEPT, say the customer may try for a lower price. If finalized, say the best price is locked, and when the decision is COUNTER present the approved price warmly as the price Hook can do for them. Never call an offer too low, never say Hook cannot go lower, and never hint at a minimum or limit; just say what Hook can do. Never reveal internal pricing information. Return JSON with exactly message and decision fields.`,
           },
           ...(context.conversation || []).map((entry): ChatCompletionMessageParam => ({ role: entry.role === 'customer' ? 'user' : 'assistant', content: entry.message })),
           {
@@ -424,7 +430,7 @@ async phrase(decision: PricingDecision, context: { customerMessage?: string; lan
         // With several items the customer must be shown the total, not just a per-item figure.
         const omittedApprovedPrice = approvedNaira !== undefined
           && (monetaryAmounts.length === 0 || (approvedTotalNaira !== undefined && !monetaryAmounts.includes(approvedTotalNaira)));
-        const falselyAccepts = decision.decision !== 'ACCEPT'
+        const falselyAccepts = decision.decision !== 'ACCEPT' && !context.finalized
           && /\b(offer accepted|your offer works|that works|deal accepted|we agree|we gree|i agree|i gree)\b/i.test(parsed.message);
         if (
           parsed.decision !== decision.decision

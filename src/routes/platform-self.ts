@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { AccountType, ProductAvailabilityStatus } from "@lib/constants";
 import { routeParam } from "@lib/api-utils";
-import { requireAccountType, requireAuth } from "@middleware/auth";
+import { requireAccountType, requireAuth, requireOwnPassword, requirePasswordChanged } from "@middleware/auth";
 import { validateBody } from "@middleware/validate";
 import { withIdempotency } from '@middleware/idempotency';
 import {
@@ -14,6 +14,10 @@ import {
 import { Market } from "@models/platform/network.model";
 import { User } from "@models/users/user.model";
 import { asyncHandler, HttpError, sendSuccess } from "@utils/http";
+import { MarketVendorService } from "@modules/catalog/market-vendor.service";
+import { VendorCatalogService } from "@modules/catalog/vendor-catalog.service";
+import { recordAudit } from "@modules/platform/platform-audit.service";
+import { publishRealtime } from "@modules/platform/realtime.service";
 import { MarketAssociateCatalogController } from "@controllers/market-associate/catalog.controller";
 import {
   negotiationCreateSchema,
@@ -97,6 +101,7 @@ export function createMarketAssociateRouter() {
   const catalog = new MarketAssociateCatalogController();
   const fulfilment = new FulfilmentController();
   const marketVendors = new MarketAssociateMarketVendorController();
+  const marketVendorService = new MarketVendorService();
   router.use(requireAuth, requireAccountType(AccountType.MARKETASSOCIATE));
   mountNotificationRoutes(router);
   router.get(
@@ -173,7 +178,11 @@ export function createMarketAssociateRouter() {
         _id: { $in: assignments.map((item) => item.marketId) },
         status: "active",
       }).lean({ virtuals: true });
-      sendSuccess(res, { assignments, markets });
+      const stats = await marketVendorService.marketOverviewStats(markets.map((market: any) => String(market._id)), profile._id.toString());
+      sendSuccess(res, {
+        assignments,
+        markets: markets.map((market: any) => ({ ...market, stats: stats.get(String(market._id)) })),
+      });
     }),
   );
   router.get('/markets/:id', asyncHandler(marketVendors.market));
@@ -248,6 +257,7 @@ export function createMarketAssociateRouter() {
     validateBody(marketAssociateSubmissionDraftSchema),
     asyncHandler(catalog.update),
   );
+  router.delete("/product-submissions/:id", asyncHandler(catalog.remove));
   router.post(
     "/product-submissions/:id/submit",
     validateBody(
@@ -411,5 +421,68 @@ export function createPartnerRouter() {
     "/orders/:orderId/payment-instructions",
     asyncHandler(commerce.paymentInstructions),
   );
+  return router;
+}
+
+const vendorProfileSchema = z.object({
+  businessName: z.string().trim().min(2).max(180).optional(),
+  contactName: z.string().trim().min(2).max(120).optional(),
+  phone: z.string().trim().min(7).max(24).regex(/^[+\d][\d\s()-]*$/, "Enter a valid phone number").optional(),
+  address: z.string().trim().max(500).optional(),
+  description: z.string().trim().max(600).optional(),
+  imageUrl: z.union([z.string().trim().url().max(500), z.literal("")]).optional(),
+  preferredContactChannel: z.enum(["phone", "email", "whatsapp"]).optional(),
+}).strict();
+
+const vendorPaymentSchema = z.object({
+  method: z.enum(["cash", "bank_transfer", "other"]),
+  bankName: z.string().trim().max(120).optional(),
+  bankCode: z.string().trim().max(30).optional(),
+  accountName: z.string().trim().max(180).optional(),
+  accountNumber: z.string().trim().regex(/^\d{10}$/, "Enter the 10-digit account number").optional(),
+  password: z.string().min(1, "Enter your password to confirm"),
+}).strict();
+
+/** Self-service for signed-in vendors. Everything is scoped to the vendor linked to the login. */
+export function createVendorRouter() {
+  const router = Router();
+  const catalog = new VendorCatalogService();
+  router.use(requireAuth, requireAccountType(AccountType.VENDOR), requirePasswordChanged);
+  mountNotificationRoutes(router);
+  router.get("/dashboard", asyncHandler(async (req, res) => sendSuccess(res, await catalog.dashboard(req.user!.sub))));
+  router.get("/profile", asyncHandler(async (req, res) => sendSuccess(res, await catalog.profile(req.user!.sub))));
+  router.patch("/profile", validateBody(vendorProfileSchema), asyncHandler(async (req, res) => sendSuccess(res, await catalog.updateProfile(req.user!.sub, req.body))));
+  router.patch("/payment-profile", requireOwnPassword, validateBody(vendorPaymentSchema), asyncHandler(async (req, res) => {
+    const result = await catalog.updatePayment(req.user!.sub, req.body);
+    await recordAudit(req, { action: "vendor.payment_profile.updated", entityType: "market_vendor", entityId: result.vendor.publicId, entityPublicId: result.vendor.publicId, after: { method: req.body.method } });
+    sendSuccess(res, result);
+  }));
+  router.get("/payouts", asyncHandler(async (req, res) => sendSuccess(res, await catalog.payouts(req.user!.sub, req.query))));
+  router.get("/orders", asyncHandler(async (req, res) => sendSuccess(res, await catalog.orders(req.user!.sub, req.query))));
+  router.get("/product-submissions", asyncHandler(async (req, res) => sendSuccess(res, await catalog.list(req.user!.sub, req.query))));
+  router.post("/product-submissions", validateBody(marketAssociateSubmissionDraftSchema), asyncHandler(async (req, res) => {
+    const created = await catalog.create(req.user!.sub, req.body);
+    await recordAudit(req, { action: "catalog.submission.created", entityType: "product_submission", entityId: created.id, entityPublicId: created.publicId, stateId: created.sourceStateId, after: created });
+    res.status(201);
+    sendSuccess(res, created);
+  }));
+  router.get("/product-submissions/:id", asyncHandler(async (req, res) => sendSuccess(res, await catalog.detail(req.user!.sub, routeParam(req.params.id)))));
+  router.patch("/product-submissions/:id", validateBody(marketAssociateSubmissionDraftSchema), asyncHandler(async (req, res) => sendSuccess(res, await catalog.update(req.user!.sub, routeParam(req.params.id), req.body))));
+  router.delete("/product-submissions/:id", asyncHandler(async (req, res) => {
+    await catalog.deleteDraft(req.user!.sub, routeParam(req.params.id));
+    sendSuccess(res, { deleted: true });
+  }));
+  router.post("/product-submissions/:id/submit", validateBody(z.object({ version: z.coerce.number().int().positive() }).strict()), asyncHandler(async (req, res) => {
+    const updated = await catalog.submit(req.user!.sub, routeParam(req.params.id), req.body.version);
+    await recordAudit(req, { action: "catalog.submission.submitted", entityType: "product_submission", entityId: updated.id, entityPublicId: updated.publicId, stateId: updated.sourceStateId, after: { status: updated.status, submittedAt: updated.submittedAt } });
+    publishRealtime({ type: "admin.dashboard.updated", entityId: updated.publicId }, { admin: true });
+    sendSuccess(res, { publicId: updated.publicId, status: updated.status, version: updated.version });
+  }));
+  router.post("/products/:id/confirm-availability", asyncHandler(async (req, res) => {
+    sendSuccess(res, await catalog.confirmAvailability(req.user!.sub, routeParam(req.params.id)));
+  }));
+  router.patch("/products/:id/availability", validateBody(z.object({ availabilityStatus: z.enum([ProductAvailabilityStatus.AVAILABLE, ProductAvailabilityStatus.UNAVAILABLE]) }).strict()), asyncHandler(async (req, res) => {
+    sendSuccess(res, await catalog.setAvailability(req.user!.sub, routeParam(req.params.id), req.body.availabilityStatus));
+  }));
   return router;
 }

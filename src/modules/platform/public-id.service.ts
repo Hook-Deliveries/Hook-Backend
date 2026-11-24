@@ -10,6 +10,7 @@ export const PUBLIC_ID_PREFIXES = {
   hub: 'HUB',
   partner: 'HPT',
   marketAssociate: 'MA',
+  vendorAccount: 'VND',
   customer: 'CUS',
   staff: 'STF',
   category: 'CAT',

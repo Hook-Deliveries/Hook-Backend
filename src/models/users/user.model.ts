@@ -33,6 +33,8 @@ export interface User extends BaseEntity {
   failedLoginAttempts?: number;
   lockedUntil?: Date;
   passwordChangedAt?: Date;
+  /** Set on accounts created with a default password; the API stays locked to the change-password screen until it is cleared. */
+  mustChangePassword?: boolean;
   migratedFrom?: { model: string; sourceId: string; migratedAt: Date };
   originatingGuestId?: string;
   /** Minted on first use by ReferralService.ensureCode(), not at signup. */
@@ -71,6 +73,7 @@ const UserSchema = createSchema<User>({
   failedLoginAttempts: { type: Number, default: 0 },
   lockedUntil: { type: Date },
   passwordChangedAt: { type: Date },
+  mustChangePassword: { type: Boolean, default: false },
   migratedFrom: { type: Object },
   originatingGuestId: { type: String, sparse: true, index: true },
   referralCode: { type: String, unique: true, sparse: true, index: true, uppercase: true, maxlength: 20 },

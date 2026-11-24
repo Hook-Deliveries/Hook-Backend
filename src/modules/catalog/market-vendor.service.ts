@@ -15,6 +15,7 @@ import { nextPublicId } from '@modules/platform';
 import { decryptVendorAccountNumber, encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
 import { HttpError, isDuplicateKeyError } from '@utils/http';
 import { EmailService } from '@emails/email.service';
+import { DEFAULT_VENDOR_PASSWORD, provisionVendorAccount, syncVendorAccount } from '@modules/catalog/vendor-account.service';
 
 const email = new EmailService();
 
@@ -109,7 +110,8 @@ function paymentProfile(input: any): VendorPaymentProfile | undefined {
     accountName: input.accountName?.trim() || undefined,
     accountNumberEncrypted: accountNumber ? encryptVendorAccountNumber(accountNumber) : undefined,
     accountNumberLast4: accountNumber ? accountNumber.slice(-4) : undefined,
-    verificationStatus: 'unverified',
+    // Payout details are verified when saved: vendors are verified on joining and Hook has no separate bank check.
+    verificationStatus: 'verified',
     updatedAt: new Date(),
   };
 }
@@ -134,6 +136,45 @@ async function notifyAccount(accountId: string, title: string, body: string, dat
 }
 
 export class MarketVendorService {
+  /**
+   * Per-Market numbers for a Market Associate's overview: suppliers, captured products, products waiting for an
+   * availability check, and the associate's own submissions by stage. Keyed by the Market's _id.
+   */
+  async marketOverviewStats(marketIds: string[], marketAssociateId: string) {
+    const empty = () => ({ vendors: 0, activeVendors: 0, products: 0, pendingAvailability: 0, submissions: { total: 0, inReview: 0, changesRequested: 0, approved: 0, drafts: 0 }, lastSubmissionAt: null as Date | null });
+    const stats = new Map(marketIds.map((id) => [id, empty()]));
+    if (!marketIds.length) return stats;
+    const notDeleted = { deletedAt: { $exists: false } };
+    const [vendors, products, submissions] = await Promise.all([
+      MarketVendor.aggregate([{ $match: { marketId: { $in: marketIds }, ...notDeleted } }, { $group: { _id: { market: '$marketId', status: '$status' }, count: { $sum: 1 } } }]),
+      Product.aggregate([{ $match: { marketId: { $in: marketIds }, ...notDeleted } }, { $group: { _id: { market: '$marketId', unconfirmed: { $eq: ['$availabilityStatus', 'unconfirmed'] } }, count: { $sum: 1 } } }]),
+      ProductSubmission.aggregate([{ $match: { marketId: { $in: marketIds }, marketAssociateId, ...notDeleted } }, { $group: { _id: { market: '$marketId', status: '$status' }, count: { $sum: 1 }, last: { $max: '$updatedAt' } } }]),
+    ]);
+    for (const row of vendors) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.vendors += row.count;
+      if (row._id.status === 'active') entry.activeVendors += row.count;
+    }
+    for (const row of products) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.products += row.count;
+      if (row._id.unconfirmed) entry.pendingAvailability += row.count;
+    }
+    for (const row of submissions) {
+      const entry = stats.get(String(row._id.market));
+      if (!entry) continue;
+      entry.submissions.total += row.count;
+      if (['submitted', 'in_review'].includes(row._id.status)) entry.submissions.inReview += row.count;
+      if (row._id.status === 'changes_requested') entry.submissions.changesRequested += row.count;
+      if (row._id.status === 'approved') entry.submissions.approved += row.count;
+      if (row._id.status === 'draft') entry.submissions.drafts += row.count;
+      if (!entry.lastSubmissionAt || row.last > entry.lastSubmissionAt) entry.lastSubmissionAt = row.last;
+    }
+    return stats;
+  }
+
   async marketAssociateMarket(accountId: string, identifier: string) {
     const { market, marketAssociate } = await marketAssociateContext(accountId, identifier);
     const [vendors, assignments, submissions, products, collections] = await Promise.all([
@@ -203,6 +244,9 @@ export class MarketVendorService {
     const normalizedPhone = normalizePhone(input.phone);
     if (normalizedPhone.length < 7) throw new HttpError(400, 'Enter a valid vendor phone number', undefined, 'VALIDATION_ERROR');
     const emailAddress = input.email?.trim().toLowerCase() || undefined;
+    // The email is the vendor's sign-in, so it is required.
+    if (!emailAddress) throw new HttpError(400, 'Enter the vendor email address. It is what they sign in with.', { field: 'email' }, 'VALIDATION_ERROR');
+    if (await User.exists({ email: emailAddress })) throw new HttpError(409, 'An account with this email already exists', { field: 'email' }, 'CONFLICT');
     const duplicate = await MarketVendor.findOne({
       marketId: market._id.toString(),
       deletedAt: { $exists: false },
@@ -210,62 +254,68 @@ export class MarketVendorService {
     }).lean();
     if (duplicate) throw new HttpError(409, 'This vendor is already tracked in this Market', undefined, 'MARKET_VENDOR_DUPLICATE');
 
-    const token = crypto.randomBytes(32).toString('base64url');
-    const invitationExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    const session = await mongoose.startSession();
+    // A supplier added by a Market Associate or staff is active straight away: there is no verification step and
+    // no invitation to accept, so products can be linked to them immediately.
     let vendor: any;
-    let invitation: any;
     try {
-      await session.withTransaction(async () => {
-        vendor = await MarketVendor.create([{
-          publicId: await nextPublicId('marketVendor'),
-          marketId: market._id.toString(),
-          stateId: market.stateId,
-          businessName: input.businessName.trim(),
-          contactName: input.contactName.trim(),
-          normalizedPhone,
-          phone: input.phone.trim(),
-          email: emailAddress,
-          address: input.address?.trim(),
-          preferredContactChannel: input.preferredContactChannel || 'phone',
-          paymentProfile: paymentProfile(input.paymentProfile),
-          status: 'pending',
-          invitedByMarketAssociateId: inviter.marketAssociateId,
-          notes: input.notes?.trim(),
-        } as any], { session });
-        invitation = await VendorInvitation.create([{
-          publicId: await nextPublicId('vendorInvitation'),
-          vendorId: vendor[0].id,
-          marketId: market._id.toString(),
-          invitedByMarketAssociateId: inviter.marketAssociateId,
-          invitedByAccountId: inviter.accountId,
-          email: emailAddress,
-          tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
-          status: 'pending',
-          expiresAt: invitationExpiresAt,
-        }], { session });
-      });
+      vendor = await MarketVendor.create({
+        publicId: await nextPublicId('marketVendor'),
+        marketId: market._id.toString(),
+        stateId: market.stateId,
+        businessName: input.businessName.trim(),
+        contactName: input.contactName.trim(),
+        normalizedPhone,
+        phone: input.phone.trim(),
+        email: emailAddress,
+        address: input.address?.trim(),
+        preferredContactChannel: input.preferredContactChannel || 'phone',
+        paymentProfile: paymentProfile(input.paymentProfile),
+        status: 'active',
+        invitedByMarketAssociateId: inviter.marketAssociateId,
+        notes: input.notes?.trim(),
+      } as any);
     } catch (error) {
       // Two simultaneous adds of the same vendor: the unique index decided, so answer as the pre-check does.
       if (isDuplicateKeyError(error)) throw new HttpError(409, 'This vendor is already tracked in this Market', undefined, 'MARKET_VENDOR_DUPLICATE');
       throw error;
-    } finally {
-      await session.endSession();
     }
 
-    const baseUrl = (await adminAppBaseUrl());
-    const inviteUrl = `${baseUrl}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
-    let delivery = { delivered: false, provider: 'share_link' };
-    if (emailAddress) {
-      delivery = await email.send({
-        to: emailAddress,
-        subject: `Hook is verifying your ${market.name} supplier profile`,
-        html: `<p>Hello ${input.contactName.trim()},</p><p>${input.businessName.trim()} has been added to the Hook supplier directory for ${market.name}.</p><p>Review and confirm your contact details here: <a href="${inviteUrl}">${inviteUrl}</a></p><p>This link expires in 7 days.</p>`,
-        text: `Review your Hook supplier profile for ${market.name}: ${inviteUrl}`,
-      });
-      await VendorInvitation.updateOne({ _id: invitation[0]._id }, { $set: { emailSentAt: new Date() } });
+    // Vendors are verified from the start and get a login straight away, on a default password they can keep or replace.
+    try {
+      await provisionVendorAccount(vendor);
+    } catch (error) {
+      // No login means no vendor: removing the record lets the same details be added again once the clash is fixed,
+      // instead of failing forever as "already tracked".
+      await MarketVendor.deleteOne({ _id: vendor._id }).catch(() => undefined);
+      throw error;
     }
-    return { vendor: safeVendor(vendor[0]), invitation: { publicId: invitation[0].publicId, status: invitation[0].status, expiresAt: invitationExpiresAt, inviteUrl, delivery } };
+    const delivery = await this.sendVendorWelcome(vendor, market.name);
+    return { vendor: safeVendor(vendor), delivery };
+  }
+
+  /**
+   * `new`: a first welcome with the default password. `reset`: the default password was set again. `existing`: the vendor
+   * already chose their own password, so nothing is changed and the email only shows where to sign in.
+   */
+  private async sendVendorWelcome(vendor: any, marketName: string, mode: 'new' | 'reset' | 'existing' = 'new') {
+    const loginUrl = `${await adminAppBaseUrl()}/auth/login`;
+    const intro = mode === 'existing'
+      ? `Here are your Hook vendor sign-in details for ${marketName}.`
+      : mode === 'reset'
+        ? 'Your Hook vendor password was reset.'
+        : `${vendor.businessName} has been added to Hook in ${marketName}, and your vendor account is ready.`;
+    const steps = mode === 'existing'
+      ? `Sign in at ${loginUrl} with ${vendor.email} and the password you chose. If you have forgotten it, use "Forgot password" on the sign-in page.`
+      : `Sign in at ${loginUrl} with ${vendor.email} and the temporary password ${DEFAULT_VENDOR_PASSWORD}. You can choose your own password at any time. Until you do, Hook will ask you each time you sign in whether to keep the temporary one.`;
+    const html = mode === 'existing'
+      ? `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the password you chose. If you have forgotten it, use <em>Forgot password</em> on the sign-in page.</p>`
+      : `<p>Hello ${vendor.contactName},</p><p>${intro}</p><p>Sign in at <a href="${loginUrl}">${loginUrl}</a> with <strong>${vendor.email}</strong> and the temporary password <strong>${DEFAULT_VENDOR_PASSWORD}</strong>.</p><p>You can choose your own password at any time. Until you do, Hook will ask you each time you sign in whether you want to keep the temporary one. We recommend choosing your own, because anyone who knows your email could use the temporary password.</p>`;
+    return email.send({
+      to: vendor.email,
+      subject: mode === 'reset' ? 'Your Hook vendor password was reset' : mode === 'existing' ? `Your Hook vendor sign-in for ${marketName}` : `Your Hook vendor account for ${marketName}`,
+      html,
+      text: `${intro} ${steps}`,
+    }).catch(() => ({ delivered: false, provider: 'none' }));
   }
 
   async updateMarketAssociateVendor(accountId: string, identifier: string, input: any) {
@@ -285,6 +335,7 @@ export class MarketVendorService {
     if (input.email !== undefined) update.email = input.email?.trim().toLowerCase() || undefined;
     if (input.paymentProfile !== undefined) update.paymentProfile = paymentProfile(input.paymentProfile);
     const updated = await MarketVendor.findByIdAndUpdate(vendor._id, { $set: update }, { returnDocument: 'after' }).lean({ virtuals: true });
+    await syncVendorAccount(vendor, update as any);
     return safeVendor(updated);
   }
 
@@ -312,6 +363,7 @@ export class MarketVendorService {
     if (input.email !== undefined) update.email = input.email?.trim().toLowerCase() || undefined;
     if (input.paymentProfile !== undefined) update.paymentProfile = paymentProfile(input.paymentProfile);
     const updated = await MarketVendor.findByIdAndUpdate(vendor._id, { $set: update }, { returnDocument: 'after' }).lean({ virtuals: true });
+    await syncVendorAccount(vendor, update as any);
     return safeVendor(updated);
   }
 
@@ -383,9 +435,16 @@ export class MarketVendorService {
       status: 'pending',
       expiresAt,
     });
-    const inviteUrl = `${(await adminAppBaseUrl())}/vendor-invitations/accept?token=${encodeURIComponent(token)}`;
+    // Re-inviting sends the sign-in details again. A vendor still on the default password gets it set again; one who chose
+    // their own password keeps it, so an invite can never lock them out of their own shop.
+    const inviteUrl = `${await adminAppBaseUrl()}/auth/login`;
     if (vendor.email) {
-      await email.send({ to: vendor.email, subject: `Hook supplier profile reminder for ${vendor.businessName}`, html: `<p>Review your Hook supplier profile here: <a href="${inviteUrl}">${inviteUrl}</a></p>`, text: inviteUrl }).then(() => VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } }));
+      const current: any = vendor.accountId ? await User.findById(vendor.accountId).select('mustChangePassword').lean() : null;
+      const hasOwnPassword = Boolean(current) && !current.mustChangePassword;
+      await provisionVendorAccount(vendor, { resetPassword: !hasOwnPassword });
+      const market = await Market.findById(vendor.marketId).select('name').lean();
+      const delivery: any = await this.sendVendorWelcome(vendor, market?.name || 'your market', hasOwnPassword ? 'existing' : 'reset');
+      if (delivery?.delivered) await VendorInvitation.updateOne({ _id: invitation._id }, { $set: { emailSentAt: new Date() } });
     }
     return { publicId: invitation.publicId, expiresAt, inviteUrl, email: vendor.email || null };
   }

@@ -274,9 +274,13 @@ export class PublicCatalogController {
       sendSuccess(res, lookup.value);
       return;
     }
+    // A product's link ends with its id ("testing-product-prd-2026-000156"). If the name was edited after the link was
+    // shared or the page was opened, the old slug no longer matches, but the id on the end still finds the product.
+    const idInSlug = id.match(/(prd-\d{4}-\d{6})$/i)?.[1]?.toUpperCase();
+    const bySlug = [{ publicId: id }, { slug: id }, ...(idInSlug ? [{ publicId: idInSlug }] : [])];
     const identifier = /^[a-f\d]{24}$/i.test(id)
-      ? { $or: [{ _id: id }, { publicId: id }, { slug: id }] }
-      : { $or: [{ publicId: id }, { slug: id }] };
+      ? { $or: [{ _id: id }, ...bySlug] }
+      : { $or: bySlug };
     const product = await Product.findOne({
       $and: [
         identifier,
@@ -287,9 +291,12 @@ export class PublicCatalogController {
             { status: ProductStatus.PUBLISHED },
             {
               status: {
+                // Not on sale right now, but the page still opens and says so: a shared link, a bookmark or an open tab must
+                // not turn into "not found" because a vendor ran out of stock or a recheck is under way.
                 $in: [
                   ProductStatus.AVAILABILITY_UNCONFIRMED,
                   ProductStatus.PAUSED,
+                  ProductStatus.SOLD_OUT,
                 ],
               },
               availabilityStatus: {

@@ -33,6 +33,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationDefinition> = {
 
   // Discovery
   new_products: E('discovery', 'shop', 20),
+  // One product the moment it goes live: names its Market and State, and opens that product.
+  new_product: E('discovery', 'product', 0),
   new_market: E('discovery', 'market', 24 * 3),
   new_state: E('discovery', 'states', 24 * 7),
   new_category: E('discovery', 'shop', 24 * 3),
@@ -107,6 +109,10 @@ const TEMPLATES: Record<string, (params: Params) => RenderedNotification> = {
     title: p.categoryName ? `New in ${p.categoryName}` : 'New arrivals on Hook',
     body: Number(p.count) > 1 ? `${plural(Number(p.count), 'new item')} just landed${p.stateName ? ` near ${p.stateName}` : ''}. Take a look.` : `${p.title || 'A new item'} just landed. Take a look.`,
   }),
+  new_product: (p) => ({
+    title: [p.marketName ? `New from ${p.marketName}` : 'New on Hook', p.stateName].filter(Boolean).join(', '),
+    body: `${p.title || 'A new item'}${p.price ? ` · ${p.price}` : ''} just went live. Tap to take a look.`,
+  }),
   new_market: (p) => ({ title: `${p.marketName} is now on Hook`, body: `Shop ${p.marketName}${p.stateName ? ` in ${p.stateName}` : ''} without leaving home.` }),
   new_state: (p) => ({ title: `Hook now delivers to ${p.stateName}`, body: 'Browse markets near you and order today.' }),
   new_category: (p) => ({ title: `${p.categoryName} is now on Hook`, body: 'Have a look at what is new.' }),
@@ -132,4 +138,31 @@ export function renderNotification(type: string, params: Params = {}): RenderedN
   const template = TEMPLATES[type];
   if (!template) return { title: String(params.title || 'Hook'), body: String(params.body || '') };
   return template(params);
+}
+
+/**
+ * Where a tapped notification opens on the website. The mobile app reads `screen` and `params` itself; the browser gets
+ * a ready path so the service worker never needs to know Hook's routes.
+ */
+export function webPathFor(screen: NotificationScreen, params: Record<string, unknown> = {}): string {
+  const text = (value: unknown) => (typeof value === 'string' || typeof value === 'number' ? encodeURIComponent(String(value)) : undefined);
+  const productId = text(params.productId);
+  const orderId = text(params.orderId);
+  switch (screen) {
+    case 'product': return productId ? `/product/${productId}` : '/';
+    case 'order': return orderId ? `/profile/orders/${orderId}` : '/profile/orders';
+    case 'orders': return '/profile/orders';
+    case 'cart': return '/cart';
+    case 'checkout': return '/checkout';
+    case 'shop': return text(params.categoryId) ? `/?categoryId=${text(params.categoryId)}` : '/';
+    case 'market': return text(params.marketId) ? `/?marketId=${text(params.marketId)}` : '/';
+    case 'credits': return '/profile/credit';
+    case 'referrals': return '/profile/referrals';
+    case 'devices': return '/profile/devices';
+    case 'security': return '/profile/security';
+    case 'addresses': return '/profile/addresses';
+    case 'negotiation': return '/offers';
+    case 'notifications': return '/notifications';
+    default: return '/';
+  }
 }

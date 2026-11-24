@@ -211,6 +211,8 @@ export async function sendPushToUser(userId: string, content: Omit<PushMessage, 
 }
 
 const vapidConfigured = () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+export const webPushPublicKey = () => pushEnabled() && vapidConfigured() ? process.env.VAPID_PUBLIC_KEY! : null;
+
 let vapidSet = false;
 function ensureVapid() {
   if (vapidSet || !vapidConfigured()) return;
@@ -233,6 +235,7 @@ export async function sendWebPushToUser(userId: string, content: { title: string
       await webpush.sendNotification(
         { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
         JSON.stringify({ title: content.title, body: content.body, data: content.data || {} }),
+        { TTL: 60 * 60 * 24, urgency: 'normal' },
       );
     } catch (error) {
       const statusCode = (error as { statusCode?: number })?.statusCode;

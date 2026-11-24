@@ -77,7 +77,7 @@ export function rateLimit(name: string, options: RateLimitOptions) {
       res.setHeader('X-RateLimit-Reset', String(Math.ceil(entry.resetAt / 1000)));
       if (entry.count > options.max) {
         res.setHeader('Retry-After', String(Math.max(Math.ceil((entry.resetAt - Date.now()) / 1000), 1)));
-        return next(new HttpError(429, options.message || 'Too many requests. Please try again later.'));
+        return next(new HttpError(429, options.message || 'Too many requests. Please try again later.', undefined, 'RATE_LIMITED'));
       }
       return next();
     }).catch(next);
@@ -125,10 +125,25 @@ export const generalLimiter = rateLimit('general', {
   max: Number(process.env.RATE_LIMIT_MAX || 600),
 });
 
+/**
+ * Routes where someone can guess a password or a code: sign-in, signup, password reset. A few people behind one office or
+ * phone network share an address, and a signup alone takes several requests, so the limit has room for normal use. Each
+ * account also locks itself after repeated wrong passwords, which is the real defence against guessing.
+ */
 export const authLimiter = rateLimit('auth', {
   windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
-  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 20),
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 60),
   message: 'Too many authentication attempts. Please try again later.',
+});
+
+/**
+ * Calls a signed-in app or portal makes just by being open: loading the profile, renewing a token, signing out. They
+ * guess nothing, and every page load makes one, so they must never share a bucket with sign-in attempts.
+ */
+export const sessionLimiter = rateLimit('session', {
+  windowMs: Number(process.env.SESSION_RATE_LIMIT_WINDOW_MS || 15 * 60_000),
+  max: Number(process.env.SESSION_RATE_LIMIT_MAX || 600),
+  message: 'Too many requests. Please slow down and try again shortly.',
 });
 
 // Each negotiation message costs model calls, so a signed-in customer is limited per account rather than per IP.

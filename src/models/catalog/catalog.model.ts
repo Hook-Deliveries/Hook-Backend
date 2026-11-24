@@ -23,7 +23,9 @@ export interface ReviewNote {
 
 export interface ProductSubmission extends BaseEntity {
   publicId: string;
-  marketAssociateId: string;
+  /** Absent when the vendor captured the product themselves. */
+  marketAssociateId?: string;
+  createdBy?: 'market_associate' | 'vendor';
   marketId: string;
   marketVendorId?: string;
   sourceStateId: string;
@@ -110,7 +112,8 @@ export interface NegotiatedQuote extends BaseEntity {
 
 const submissionSchema = createSchema<ProductSubmission>({
   publicId: { type: String, required: true, unique: true, index: true },
-  marketAssociateId: { type: String, required: true, index: true },
+  marketAssociateId: { type: String, index: true },
+  createdBy: { type: String, enum: ['market_associate', 'vendor'], default: 'market_associate', index: true },
   marketId: { type: String, required: true, index: true },
   marketVendorId: { type: String, index: true },
   sourceStateId: { type: String, required: true, index: true },

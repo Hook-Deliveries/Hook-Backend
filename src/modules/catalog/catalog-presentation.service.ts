@@ -80,15 +80,29 @@ type Resolved = {
 /** The shared submission shape both the single-record and batched presenters return. */
 function format(record: any, resolved: Resolved, mediaService: CatalogMediaService) {
   const { market, category, state, marketAssociate, product, marketVendor } = resolved;
-  const media = resolved.media.map((asset: any) => ({
-    ...asset,
-    deliveryUrl: asset.deliveryUrl
-      || (asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset)),
-  }));
+  // Photos come back in the order the Market Associate submitted them (front, side, back, then extras), not in
+  // whatever order the database happens to return them, so a reviewer sees exactly what was captured.
+  const submittedOrder = new Map<string, number>((record.mediaIds || []).map((id: string, index: number) => [String(id), index]));
+  const media = resolved.media
+    .map((asset: any) => ({
+      ...asset,
+      deliveryUrl: asset.deliveryUrl
+        || (asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset)),
+    }))
+    .sort((a: any, b: any) => (submittedOrder.get(String(a.publicId)) ?? 999) - (submittedOrder.get(String(b.publicId)) ?? 999));
+  const known = new Set(media.map((asset: any) => String(asset.publicId)));
+  // Which photo is the front, side and back. Only views whose photo still exists are reported.
+  const mediaViews = Object.fromEntries(
+    (['front', 'side', 'back'] as const)
+      .map((view) => [view, record.mediaViews?.[view]] as const)
+      .filter(([, id]) => id && known.has(String(id))),
+  ) as { front?: string; side?: string; back?: string };
+  const primary = media.find((asset: any) => asset.publicId === mediaViews.front) || media[0];
   return {
     id: record.publicId,
     publicId: record.publicId,
     marketAssociate: marketAssociate ? { publicId: marketAssociate.publicId, name: marketAssociate.name } : null,
+    createdBy: record.createdBy || 'market_associate',
     marketId: market?.publicId,
     market: market ? { publicId: market.publicId, name: market.name } : null,
     sourceStateId: state?.publicId,
@@ -101,6 +115,8 @@ function format(record: any, resolved: Resolved, mediaService: CatalogMediaServi
     basicTitle: record.basicTitle,
     notes: record.notes,
     mediaIds: media.map((asset: any) => asset.publicId),
+    mediaViews,
+    captureChecklistConfirmed: Boolean(record.captureChecklistConfirmed),
     media: media.map((asset: any) => ({
       publicId: asset.publicId,
       deliveryUrl: asset.deliveryUrl,
@@ -108,7 +124,7 @@ function format(record: any, resolved: Resolved, mediaService: CatalogMediaServi
       height: asset.height,
       format: asset.format,
     })),
-    imageUrl: media[0]?.deliveryUrl,
+    imageUrl: primary?.deliveryUrl,
     basePriceMinor: record.basePriceMinor,
     currency: record.currency,
     variants: record.variants || [],

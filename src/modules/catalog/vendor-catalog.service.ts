@@ -1,0 +1,671 @@
+import { ProductAvailabilityStatus, ProductStatus, ProductSubmissionStatus } from '@lib/constants';
+import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
+import { CatalogMediaAsset, ProductSubmission, type SubmissionVariant } from '@models/catalog/catalog.model';
+import { MarketVendor, VendorCollection, VendorPaymentRecord } from '@models/catalog/market-vendor.model';
+import { Order } from '@models/orders/order.model';
+import { OrderItem } from '@models/orders/order-item.model';
+import { Product } from '@models/products/product.model';
+import { Market } from '@models/platform/network.model';
+import { Category } from '@models/categories/category.model';
+import { User } from '@models/users/user.model';
+import { adminProductStatsCache, adminReviewCache } from '@lib/ttl-cache';
+import { comparePassword } from '@lib/security';
+import { encryptVendorAccountNumber } from '@lib/vendor-payment-crypto';
+import { createCommerceNotification } from '@modules/notifications';
+import { CatalogMediaService } from '@modules/catalog/catalog-media.service';
+import { categoryService } from '@modules/catalog/category.service';
+import {
+  assignableCategory,
+  canonicalSubmissionMedia,
+  claimMedia,
+  identifierQuery,
+  sellerReferenceFor,
+  validateSubmissionReady,
+  type SubmissionInput,
+} from '@modules/catalog/catalog.service';
+import { notifyStaffByPermission } from '@modules/notifications';
+import { reconcileProductInBackground } from '@modules/negotiation/public';
+import { nextPublicId, publishRealtime } from '@modules/platform';
+import { HttpError } from '@utils/http';
+
+const EDITABLE = [ProductSubmissionStatus.DRAFT, ProductSubmissionStatus.CHANGES_REQUESTED];
+
+/** The supplier behind a vendor login. Everything a vendor does is scoped to this record, never to an id they send. */
+async function vendorFor(accountId: string) {
+  const vendor: any = await MarketVendor.findOne({ accountId, deletedAt: { $exists: false } }).lean({ virtuals: true });
+  if (!vendor) throw new HttpError(403, 'No vendor profile is linked to this account', undefined, 'ACCESS_DENIED');
+  if (vendor.status !== 'active') throw new HttpError(403, 'This vendor account is not active', undefined, 'ACCESS_DENIED');
+  return vendor;
+}
+
+/**
+ * Everything on a vendor's shelf: what they captured themselves, plus what a Market Associate added in their name once it
+ * has been sent in. An associate's unfinished draft stays private to the associate, and only the creator edits a submission.
+ */
+function shelfFilter(vendorId: string): Record<string, any> {
+  return {
+    marketVendorId: vendorId,
+    deletedAt: { $exists: false },
+    $or: [{ createdBy: 'vendor' }, { status: { $ne: ProductSubmissionStatus.DRAFT } }],
+  };
+}
+
+/** The slice of a live product the vendor screens need: its state, and whether it can be confirmed after a recheck. */
+function stockView(product: any) {
+  return { publicId: product.publicId, status: product.status, availabilityStatus: product.availabilityStatus, availabilityValidUntil: product.availabilityValidUntil, wasLive: product.availabilityPreviousStatus === ProductStatus.PUBLISHED };
+}
+
+/** Statuses at which a product Hook created for a vendor is shown to them: it has been published at some point. */
+const DIRECT_PRODUCT_STATUSES = [ProductStatus.PUBLISHED, ProductStatus.PAUSED, ProductStatus.SOLD_OUT, ProductStatus.AVAILABILITY_UNCONFIRMED, ProductStatus.UNPUBLISHED];
+
+/**
+ * A product Hook created directly in the admin for this vendor has no submission behind it, so it would never reach the
+ * vendor's list. It is shown as an approved, read-only row, with the same stock controls as any other live product.
+ */
+function directProductRow(product: any) {
+  return {
+    publicId: product.publicId,
+    basicTitle: product.title,
+    status: ProductSubmissionStatus.APPROVED,
+    createdBy: 'market_associate',
+    basePriceMinor: Math.round(Number(product.basePriceMinor ?? Number(product.costPrice || 0) * 100)),
+    currency: product.currency || 'NGN',
+    updatedAt: product.updatedAt,
+    imageUrl: product.images?.[0],
+    reviewNotes: [],
+    product: stockView(product),
+  };
+}
+
+/** Reviewer notes a vendor may see: what was decided and why, without who decided it. */
+function publicNotes(notes: any[] = []) {
+  return notes.map((note) => ({ action: note.action, message: note.message, fields: note.fields, createdAt: note.createdAt }));
+}
+
+function present(submission: any, extra: Record<string, unknown> = {}) {
+  const { reviewNotes, internalSellerReference: _ref, marketAssociateId: _ma, reviewedBy: _by, ...rest } = submission;
+  return { ...rest, reviewNotes: publicNotes(reviewNotes), ...extra };
+}
+
+/**
+ * Product capture for vendors. Mirrors the Market Associate flow (draft, edit, submit, review) but is owned by the
+ * vendor: no market assignment, and the supplier is always the signed-in vendor.
+ */
+export class VendorCatalogService {
+  async profile(accountId: string) {
+    const [vendor, account] = await Promise.all([
+      vendorFor(accountId),
+      User.findById(accountId).select('email firstName lastName phone avatarUrl').lean(),
+    ]);
+    const marketRecord = await Market.findById(vendor.marketId).select('publicId name address stateId').lean({ virtuals: true });
+    const profile = vendor.paymentProfile || {};
+    return {
+      vendor: {
+        publicId: vendor.publicId,
+        businessName: vendor.businessName,
+        contactName: vendor.contactName,
+        phone: vendor.phone,
+        email: vendor.email || null,
+        address: vendor.address || null,
+        description: vendor.description || null,
+        imageUrl: vendor.imageUrl || null,
+        preferredContactChannel: vendor.preferredContactChannel,
+        status: vendor.status,
+        verifiedAt: vendor.verifiedAt || null,
+        paymentProfile: {
+          method: profile.method || 'cash',
+          bankName: profile.bankName || null,
+          bankCode: profile.bankCode || null,
+          accountName: profile.accountName || null,
+          accountNumberLast4: profile.accountNumberLast4 || null,
+          verificationStatus: profile.verificationStatus || 'unverified',
+        },
+      },
+      market: marketRecord,
+      account,
+    };
+  }
+
+  async updateProfile(accountId: string, input: Record<string, any>) {
+    const vendor = await vendorFor(accountId);
+    const set: Record<string, unknown> = {};
+    for (const key of ['businessName', 'contactName', 'address', 'description', 'preferredContactChannel', 'imageUrl'] as const) {
+      if (input[key] !== undefined) set[key] = typeof input[key] === 'string' ? input[key].trim() : input[key];
+    }
+    if (input.phone !== undefined) {
+      const digits = String(input.phone).replace(/\D/g, '');
+      const normalized = digits.startsWith('234') && digits.length === 13 ? `0${digits.slice(3)}` : digits;
+      if (normalized.length < 7) throw new HttpError(400, 'Enter a valid phone number', { field: 'phone' }, 'VALIDATION_ERROR');
+      const clash = await MarketVendor.exists({ marketId: vendor.marketId, normalizedPhone: normalized, _id: { $ne: vendor._id }, deletedAt: { $exists: false } });
+      if (clash) throw new HttpError(409, 'Another vendor in this market already uses that phone number', { field: 'phone' }, 'CONFLICT');
+      set.phone = String(input.phone).trim();
+      set.normalizedPhone = normalized;
+    }
+    if (Object.keys(set).length) {
+      await MarketVendor.updateOne({ _id: vendor._id }, { $set: set });
+      const accountSet: Record<string, unknown> = {};
+      if (set.phone) accountSet.phone = set.phone;
+      if (set.contactName) {
+        const parts = String(set.contactName).split(/\s+/);
+        accountSet.firstName = parts[0];
+        accountSet.lastName = parts.slice(1).join(' ');
+      }
+      if (Object.keys(accountSet).length) await User.updateOne({ _id: accountId }, { $set: accountSet }).catch(() => undefined);
+    }
+    return this.profile(accountId);
+  }
+
+  /**
+   * How Hook pays this vendor. Bank details are sensitive, so changing them needs the account password and the vendor is
+   * told it happened. They are verified straight away, like the vendor themselves.
+   */
+  async updatePayment(accountId: string, input: { method: 'cash' | 'bank_transfer' | 'other'; bankName?: string; bankCode?: string; accountName?: string; accountNumber?: string; password: string }) {
+    const vendor = await vendorFor(accountId);
+    const account: any = await User.findById(accountId).select('+password').lean();
+    if (!account?.password || !(await comparePassword(input.password, account.password))) {
+      throw new HttpError(400, 'That password is not correct', { field: 'password' }, 'VALIDATION_ERROR');
+    }
+    const current = vendor.paymentProfile || {};
+    const accountNumber = String(input.accountNumber || '').replace(/\s/g, '');
+    const next: Record<string, unknown> = { method: input.method, updatedAt: new Date() };
+    if (input.method === 'bank_transfer') {
+      const keepNumber = !accountNumber && current.accountNumberEncrypted;
+      if (!input.bankName?.trim() || !input.accountName?.trim() || (!accountNumber && !keepNumber)) {
+        throw new HttpError(400, 'Enter the bank, account name and account number', undefined, 'VALIDATION_ERROR');
+      }
+      next.bankName = input.bankName.trim();
+      next.bankCode = input.bankCode?.trim() || undefined;
+      next.accountName = input.accountName.trim();
+      next.accountNumberEncrypted = accountNumber ? encryptVendorAccountNumber(accountNumber) : current.accountNumberEncrypted;
+      next.accountNumberLast4 = accountNumber ? accountNumber.slice(-4) : current.accountNumberLast4;
+      // Vendors are verified when they join and changing details already needs their password, so a saved bank account counts as verified.
+      next.verificationStatus = 'verified';
+    } else {
+      // Cash and other methods carry no account details, so any saved ones are cleared rather than left behind.
+      next.verificationStatus = 'verified';
+    }
+    await MarketVendor.updateOne({ _id: vendor._id }, { $set: { paymentProfile: next } });
+    await createCommerceNotification({
+      eventKey: `vendor:${vendor.publicId}:payment-updated:${Date.now()}`,
+      userId: accountId,
+      title: 'Payout details updated',
+      body: input.method === 'bank_transfer' ? 'Your bank details were updated and are ready for your next payout.' : 'Your payout method was changed.',
+      type: 'catalog_availability',
+      data: { vendorId: vendor.publicId },
+    }).catch(() => undefined);
+    return this.profile(accountId);
+  }
+
+  /** What Hook collected from this vendor and what it has paid, newest first, with the running totals. */
+  async payouts(accountId: string, query: Record<string, unknown>) {
+    const vendor = await vendorFor(accountId);
+    const vendorId = vendor._id.toString();
+    const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100);
+    const filter: Record<string, any> = { marketVendorId: vendorId, status: { $ne: 'cancelled' }, deletedAt: { $exists: false } };
+    if (query.cursor) filter._id = { $lt: query.cursor };
+    const [rows, payments] = await Promise.all([
+      VendorCollection.find(filter).sort({ _id: -1 }).limit(limit + 1).lean({ virtuals: true }),
+      VendorPaymentRecord.find({ marketVendorId: vendorId, deletedAt: { $exists: false } }).lean({ virtuals: true }),
+    ]);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit) as any[];
+    const paymentByCollection = new Map<string, any>((payments as any[]).map((payment) => [String(payment.collectionId), payment]));
+    const totals = await VendorCollection.aggregate([
+      { $match: { marketVendorId: vendorId, status: 'collected', deletedAt: { $exists: false } } },
+      { $group: { _id: null, collected: { $sum: '$actualCostMinor' }, count: { $sum: 1 } } },
+    ]);
+    const paid = (payments as any[]).filter((payment) => ['recorded', 'reconciled'].includes(payment.status)).reduce((sum, payment) => sum + (payment.amountMinor || 0), 0);
+    const collected = totals[0]?.collected || 0;
+    return {
+      summary: { collectedMinor: collected, paidMinor: paid, outstandingMinor: Math.max(collected - paid, 0), pickups: totals[0]?.count || 0, currency: 'NGN' },
+      data: page.map((row) => {
+        const payment = paymentByCollection.get(String(row._id));
+        return {
+          publicId: row.publicId,
+          productTitle: row.productTitleSnapshot,
+          quantity: row.quantity,
+          amountMinor: row.actualCostMinor,
+          currency: row.currency || 'NGN',
+          status: row.status,
+          paymentStatus: payment?.status || row.paymentStatus || 'unpaid',
+          collectedAt: row.collectedAt || row.createdAt,
+          payment: payment ? { method: payment.method, status: payment.status, reference: payment.reference || null, paidAt: payment.recordedAt || null, reconciledAt: payment.reconciledAt || null } : null,
+        };
+      }),
+      nextCursor: hasMore && page.length ? String(page[page.length - 1]._id) : null,
+      hasMore,
+    };
+  }
+
+  /** Paid orders that include this vendor's products. Read-only, and never shows who bought them or where it goes. */
+  async orders(accountId: string, query: Record<string, unknown>) {
+    const vendor = await vendorFor(accountId);
+    const products: any[] = await Product.find({ sourceMarketVendorId: vendor._id.toString(), deletedAt: { $exists: false } }).select('_id publicId').lean();
+    if (!products.length) return { data: [], nextCursor: null, hasMore: false, summary: { items: 0, units: 0 } };
+    const productIds = products.flatMap((product) => [String(product._id), product.publicId]).filter(Boolean);
+    const limit = Math.min(Math.max(Number(query.limit || 25), 1), 60);
+    const itemFilter: Record<string, any> = { productId: { $in: productIds } };
+    if (query.cursor) itemFilter._id = { $lt: query.cursor };
+    const items: any[] = await OrderItem.find(itemFilter).sort({ _id: -1 }).limit((limit + 1) * 2).lean({ virtuals: true });
+    const orders: any[] = await Order.find({ _id: { $in: items.map((item) => item.orderId).filter((id) => /^[a-f\d]{24}$/i.test(String(id))) }, commercePaymentStatus: 'CONFIRMED' }).select('_id commerceStatus createdAt').lean();
+    const orderById = new Map(orders.map((order) => [String(order._id), order]));
+    const paidItems = items.filter((item) => orderById.has(String(item.orderId)));
+    const hasMore = paidItems.length > limit;
+    const page = paidItems.slice(0, limit);
+    return {
+      summary: { items: paidItems.length, units: paidItems.reduce((sum, item) => sum + (item.quantity || 0), 0) },
+      data: page.map((item) => {
+        const order = orderById.get(String(item.orderId));
+        const delivered = item.deliveryStatus === 'DELIVERED' || item.deliveryStatus === 'COLLECTED' || item.deliveryStatus === 'RESOLVED';
+        const stage = item.fulfilmentStatus === 'EXCEPTION' ? 'issue' : item.fulfilmentStatus === 'REFUNDED' ? 'refunded' : delivered ? 'delivered' : item.deliveryStatus === 'IN_TRANSIT' ? 'on_the_way' : item.fulfilmentStatus === 'COMPLETED' || item.fulfilmentStatus === 'QC_PASSED' || item.fulfilmentStatus === 'PACKED' ? 'packed' : 'being_sourced';
+        return {
+          reference: item.publicId || String(item._id).slice(-8).toUpperCase(),
+          productTitle: item.productTitle,
+          productImage: item.productImage || null,
+          quantity: item.quantity,
+          options: item.selectedVariants || {},
+          stage,
+          orderedAt: order?.createdAt || item.createdAt,
+          deliveredAt: item.deliveredAt || null,
+        };
+      }),
+      nextCursor: hasMore && page.length ? String((page[page.length - 1] as any)._id) : null,
+      hasMore,
+    };
+  }
+
+  async dashboard(accountId: string) {
+    const vendor = await vendorFor(accountId);
+    const vendorId = vendor._id.toString();
+    const [counts, published, paused, recent, awaitingConfirmation] = await Promise.all([
+      ProductSubmission.aggregate([
+        { $match: shelfFilter(vendorId) },
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Product.countDocuments({ sourceMarketVendorId: vendorId, status: ProductStatus.PUBLISHED, deletedAt: { $exists: false } }),
+      Product.countDocuments({ sourceMarketVendorId: vendorId, status: { $in: [ProductStatus.PAUSED, ProductStatus.UNPUBLISHED, ProductStatus.SOLD_OUT] }, deletedAt: { $exists: false } }),
+      Product.find({ sourceMarketVendorId: vendorId, status: ProductStatus.PUBLISHED, deletedAt: { $exists: false } })
+        .select('publicId title status publishedAt images')
+        .sort({ publishedAt: -1 })
+        .limit(5)
+        .lean({ virtuals: true }),
+      // Products that reached the end of their availability window and are hidden until the vendor confirms them.
+      Product.countDocuments({ sourceMarketVendorId: vendorId, status: ProductStatus.AVAILABILITY_UNCONFIRMED, availabilityPreviousStatus: ProductStatus.PUBLISHED, deletedAt: { $exists: false } }),
+    ]);
+    const byStatus = Object.fromEntries(counts.map((item: any) => [item._id, item.count]));
+    return {
+      businessName: vendor.businessName,
+      totalProducts: counts.reduce((sum: number, item: any) => sum + item.count, 0),
+      drafts: byStatus[ProductSubmissionStatus.DRAFT] || 0,
+      submitted: (byStatus[ProductSubmissionStatus.SUBMITTED] || 0) + (byStatus[ProductSubmissionStatus.IN_REVIEW] || 0),
+      changesRequested: byStatus[ProductSubmissionStatus.CHANGES_REQUESTED] || 0,
+      rejected: byStatus[ProductSubmissionStatus.REJECTED] || 0,
+      published,
+      paused,
+      recentPublished: recent,
+      awaitingConfirmation,
+    };
+  }
+
+  async list(accountId: string, query: Record<string, unknown>) {
+    const vendor = await vendorFor(accountId);
+    const limit = Math.min(Math.max(Number(query.limit || 20), 1), 50);
+    const filter: Record<string, any> = shelfFilter(vendor._id.toString());
+    if (query.status && Object.values(ProductSubmissionStatus).includes(query.status as ProductSubmissionStatus)) filter.status = query.status;
+    if (query.cursor) filter._id = { $lt: query.cursor };
+    const rows = await ProductSubmission.find(filter).sort({ _id: -1 }).limit(limit + 1).lean({ virtuals: true });
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const products = await Product.find({ _id: { $in: page.map((row: any) => row.productId).filter(Boolean) } })
+      .select('publicId status availabilityStatus availabilityValidUntil availabilityPreviousStatus images')
+      .lean({ virtuals: true });
+    const productById = new Map(products.map((product: any) => [String(product._id), product]));
+    const mediaIds = [...new Set(page.flatMap((row: any) => row.mediaIds || []).map(String))];
+    const media = mediaIds.length ? await CatalogMediaAsset.find({ publicId: { $in: mediaIds }, status: 'ready' }).lean({ virtuals: true }) : [];
+    const mediaService = new CatalogMediaService();
+    const urlById = new Map(media.map((asset: any) => [asset.publicId, asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset)]));
+    // Products Hook created for the vendor directly (no submission) join the first page, newest first with the rest.
+    const showDirect = !query.cursor && (!query.status || query.status === ProductSubmissionStatus.APPROVED);
+    const direct = showDirect
+      ? ((await Product.find({ sourceMarketVendorId: vendor._id.toString(), sourceSubmissionId: { $exists: false }, status: { $in: DIRECT_PRODUCT_STATUSES }, deletedAt: { $exists: false } })
+          .select('publicId title status images basePriceMinor costPrice currency updatedAt availabilityStatus availabilityValidUntil availabilityPreviousStatus')
+          .sort({ updatedAt: -1 })
+          .limit(50)
+          .lean({ virtuals: true })) as any[]).map(directProductRow)
+      : [];
+    const submissionRows = page.map((row: any) => {
+      const product: any = row.productId ? productById.get(String(row.productId)) : undefined;
+      return present(row, {
+        imageUrl: urlById.get(row.mediaViews?.front || row.mediaIds?.[0]) || product?.images?.[0],
+        product: product ? stockView(product) : null,
+      });
+    });
+    const byNewest = (a: any, b: any) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
+    return {
+      data: direct.length ? [...submissionRows, ...direct].sort(byNewest) : submissionRows,
+      nextCursor: hasMore && page.length ? String((page[page.length - 1] as any)._id) : null,
+      hasMore,
+    };
+  }
+
+  /** `forEditing` limits the lookup to what the vendor captured themselves: an associate's submission is read-only here. */
+  private async own(accountId: string, identifier: string, forEditing = true) {
+    const vendor = await vendorFor(accountId);
+    // `$and`, because the id lookup and the shelf filter can both carry their own `$or`, and spreading drops one of them.
+    const scope = forEditing ? { marketVendorId: vendor._id.toString(), createdBy: 'vendor', deletedAt: { $exists: false } } : shelfFilter(vendor._id.toString());
+    const submission = await ProductSubmission.findOne({ $and: [identifierQuery(identifier), scope] } as any).lean({ virtuals: true });
+    if (!submission) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+    return { vendor, submission: submission as any };
+  }
+
+  /** The detail page for a product Hook created directly: built from the product, shaped like a submission so one screen shows both. */
+  private async directProductDetail(vendorId: string, identifier: string) {
+    const product: any = await Product.findOne({ publicId: identifier.toUpperCase(), sourceMarketVendorId: vendorId, sourceSubmissionId: { $exists: false }, status: { $in: DIRECT_PRODUCT_STATUSES }, deletedAt: { $exists: false } }).lean({ virtuals: true });
+    if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+    const isId = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+    const [market, category]: any[] = await Promise.all([
+      isId(product.marketId) ? Market.findById(product.marketId).select('publicId').lean({ virtuals: true }) : null,
+      isId(product.categoryId) ? Category.findById(product.categoryId).select('publicId').lean({ virtuals: true }) : null,
+    ]);
+    const images: string[] = (product.images || []).slice(0, 12);
+    const media = images.map((url, index) => ({ publicId: `img-${index}`, status: 'ready', deliveryType: 'external', secureUrl: url, deliveryUrl: url }));
+    const colours: string[] = product.colors?.length ? product.colors : [''];
+    const sizes: string[] = product.sizes?.length ? product.sizes : [''];
+    const variants = colours.flatMap((colour) => sizes.map((size) => ({ size, colour, attributes: {}, active: true }))).filter((item) => item.size || item.colour);
+    return {
+      ...directProductRow(product),
+      marketId: market?.publicId || product.marketId,
+      categorySuggestionId: category?.publicId || product.categoryId,
+      notes: '',
+      mediaIds: media.map((item) => item.publicId),
+      mediaViews: { front: media[0]?.publicId, side: media[1]?.publicId, back: media[2]?.publicId },
+      media,
+      variants,
+      availabilityStatus: product.availabilityStatus === ProductAvailabilityStatus.LIMITED ? 'limited' : 'available',
+      availabilityNote: '',
+      captureChecklistConfirmed: true,
+      version: Number(product.catalogVersion || 1),
+    };
+  }
+
+  async detail(accountId: string, identifier: string) {
+    // Product ids start with PRD-; a vendor's own submissions are SUB-.
+    if (/^PRD-/i.test(identifier)) return this.directProductDetail((await vendorFor(accountId))._id.toString(), identifier);
+    const { submission } = await this.own(accountId, identifier, false);
+    const media = await CatalogMediaAsset.find({
+      $or: [{ publicId: { $in: submission.mediaIds } }, { _id: { $in: submission.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }],
+      status: 'ready',
+    }).lean({ virtuals: true });
+    const mediaService = new CatalogMediaService();
+    const product: any = submission.productId ? await Product.findById(submission.productId).select('publicId status availabilityStatus availabilityValidUntil availabilityPreviousStatus').lean({ virtuals: true }) : null;
+    // A submission keeps its market and category by internal id, but the form lists and matches them by public id. Without
+    // translating, the product page shows "—" for both and an edited draft opens with no category chosen.
+    const isId = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
+    const [market, categoryRecord]: any[] = await Promise.all([
+      isId(submission.marketId) ? Market.findById(submission.marketId).select('publicId').lean({ virtuals: true }) : null,
+      isId(submission.categorySuggestionId) ? Category.findById(submission.categorySuggestionId).select('publicId').lean({ virtuals: true }) : null,
+    ]);
+    return present(submission, {
+      marketId: market?.publicId || submission.marketId,
+      categorySuggestionId: categoryRecord?.publicId || submission.categorySuggestionId,
+      media: media.map((asset: any) => ({ ...asset, deliveryUrl: asset.deliveryType === 'external' ? asset.secureUrl : mediaService.deliveryUrl(asset) })),
+      product: product ? stockView(product) : null,
+    });
+  }
+
+  async create(accountId: string, input: SubmissionInput) {
+    const vendor = await vendorFor(accountId);
+    const market: any = await Market.findById(vendor.marketId).lean({ virtuals: true });
+    if (!market || market.status !== 'active') throw new HttpError(409, 'Your market is not active right now', undefined, 'MARKET_INACTIVE');
+    const categoryRecord = await assignableCategory(input.categorySuggestionId);
+    const photos = canonicalSubmissionMedia(input.mediaIds, input.mediaViews);
+    const submission = await ProductSubmission.create({
+      publicId: await nextPublicId('submission'),
+      createdBy: 'vendor',
+      marketId: market._id.toString(),
+      marketVendorId: vendor._id.toString(),
+      sourceStateId: market.stateId,
+      categorySuggestionId: categoryRecord._id.toString(),
+      basicTitle: input.basicTitle,
+      notes: input.notes,
+      mediaIds: photos.mediaIds,
+      mediaViews: photos.mediaViews,
+      captureChecklistConfirmed: input.captureChecklistConfirmed,
+      basePriceMinor: input.basePriceMinor,
+      currency: input.currency,
+      variants: input.variants,
+      availabilityStatus: input.availabilityStatus,
+      availabilityNote: input.availabilityNote,
+      internalSellerReference: sellerReferenceFor(vendor),
+      status: ProductSubmissionStatus.DRAFT,
+      version: 1,
+    } as any);
+    await claimMedia(accountId, submission.id, photos.mediaIds);
+    return submission.toJSON();
+  }
+
+  async update(accountId: string, identifier: string, input: SubmissionInput) {
+    const { vendor, submission: current } = await this.own(accountId, identifier);
+    if (!EDITABLE.includes(current.status)) throw new HttpError(409, 'This product cannot be edited right now', undefined, 'SUBMISSION_STATE_CONFLICT');
+    if (input.version !== current.version) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    const categoryRecord = await assignableCategory(input.categorySuggestionId);
+    const photos = canonicalSubmissionMedia(input.mediaIds, input.mediaViews);
+    const updated = await ProductSubmission.findOneAndUpdate(
+      { _id: current._id, version: current.version },
+      {
+        $set: {
+          categorySuggestionId: categoryRecord._id.toString(),
+          basicTitle: input.basicTitle,
+          notes: input.notes,
+          mediaIds: photos.mediaIds,
+          mediaViews: photos.mediaViews,
+          captureChecklistConfirmed: input.captureChecklistConfirmed,
+          basePriceMinor: input.basePriceMinor,
+          currency: input.currency,
+          variants: input.variants,
+          availabilityStatus: input.availabilityStatus,
+          availabilityNote: input.availabilityNote,
+          internalSellerReference: sellerReferenceFor(vendor),
+        },
+        $inc: { version: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    await claimMedia(accountId, String(current._id), photos.mediaIds);
+    return updated as any;
+  }
+
+  async deleteDraft(accountId: string, identifier: string) {
+    const { submission: current } = await this.own(accountId, identifier);
+    if (current.status !== ProductSubmissionStatus.DRAFT) throw new HttpError(409, 'Only drafts can be deleted', undefined, 'SUBMISSION_STATE_CONFLICT');
+    const result = await ProductSubmission.updateOne(
+      { _id: current._id, status: ProductSubmissionStatus.DRAFT, deletedAt: { $exists: false } },
+      { $set: { deletedAt: new Date() }, $inc: { version: 1 } },
+    );
+    if (!result.modifiedCount) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    return current;
+  }
+
+  async submit(accountId: string, identifier: string, version: number) {
+    const { submission: current } = await this.own(accountId, identifier);
+    if (!EDITABLE.includes(current.status)) throw new HttpError(409, 'This product cannot be submitted right now', undefined, 'SUBMISSION_STATE_CONFLICT');
+    if (current.version !== version) throw new HttpError(409, 'This product was updated elsewhere', undefined, 'STALE_VERSION');
+    const categoryRecord = await assignableCategory(current.categorySuggestionId);
+    await categoryService.validateVariants(categoryRecord, (current.variants || []).filter((item: SubmissionVariant) => item.active));
+    const mediaCount = await CatalogMediaAsset.countDocuments({
+      $or: [{ publicId: { $in: current.mediaIds } }, { _id: { $in: current.mediaIds.filter((id: string) => /^[a-f\d]{24}$/i.test(id)) } }],
+      uploaderAccountId: accountId,
+      ownerId: String(current._id),
+      status: 'ready',
+    });
+    // The vendor attests the item is in stock, so an unavailable one cannot be sent for review.
+    validateSubmissionReady(current, mediaCount, { requireConfirmed: true });
+    const now = new Date();
+    const updated: any = await ProductSubmission.findOneAndUpdate(
+      { _id: current._id, version, status: current.status },
+      {
+        $set: { status: ProductSubmissionStatus.SUBMITTED, submittedAt: now, availabilityVerifiedAt: now },
+        $push: { reviewNotes: { action: 'submitted', actorId: accountId, createdAt: now } },
+        $inc: { version: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product changed before it could be submitted', undefined, 'SUBMISSION_STATE_CONFLICT');
+    await notifyStaffByPermission({
+      permission: 'catalog.submission.review',
+      stateId: updated.sourceStateId,
+      eventKeyPrefix: `submission:${updated.publicId}:submitted`,
+      title: 'New submission for review',
+      body: `${updated.basicTitle || 'A product'} was submitted by ${current.internalSellerReference || 'a vendor'}`,
+      type: 'order_updated',
+      data: { submissionId: updated.publicId, href: `/dashboard/catalog/submissions/${updated.publicId}` },
+    });
+    adminReviewCache.clear();
+    return updated;
+  }
+
+  /**
+   * Quick availability switch for a live product, so a vendor can mark an item out of stock without a review.
+   *
+   * Out of stock takes the product off sale at once (customers no longer see it anywhere), tells every open app and admin
+   * screen, and flags it for Hook to recheck on the market. Back in stock puts it straight back on sale while the market
+   * confirmation it had is still valid; once that has run out it waits, hidden, for a recheck instead of going live on the
+   * vendor's word alone.
+   */
+  async setAvailability(accountId: string, productIdentifier: string, availability: ProductAvailabilityStatus) {
+    const vendor = await vendorFor(accountId);
+    const product: any = await Product.findOne({
+      $or: [{ publicId: productIdentifier }, { hookId: productIdentifier }],
+      sourceMarketVendorId: vendor._id.toString(),
+      deletedAt: { $exists: false },
+    });
+    if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+
+    const now = new Date();
+    const wantsOut = availability === ProductAvailabilityStatus.UNAVAILABLE;
+    const isOut = product.status === ProductStatus.SOLD_OUT;
+    // Only live products (or ones already waiting on a recheck) can change; a draft or paused product is not on sale either way.
+    if (![ProductStatus.PUBLISHED, ProductStatus.SOLD_OUT, ProductStatus.AVAILABILITY_UNCONFIRMED].includes(product.status)) {
+      throw new HttpError(409, 'Only a live product can be marked in or out of stock', undefined, 'INVALID_STATE_TRANSITION');
+    }
+
+    let set: Record<string, unknown>;
+    let unset: Record<string, 1> = {};
+    let needsConfirmation = false;
+    if (wantsOut) {
+      if (isOut) return this.availabilityResult(product, false);
+      set = {
+        status: ProductStatus.SOLD_OUT,
+        availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE,
+        availabilityCheckRequestedAt: now,
+        availabilityCheckRequestedBy: accountId,
+        availabilityCheckNote: 'Marked out of stock by the vendor. Confirm on the market before it goes back on sale.',
+        customerAvailabilityNote: 'Currently out of stock.',
+      };
+    } else {
+      if (product.status === ProductStatus.PUBLISHED && product.availabilityStatus !== ProductAvailabilityStatus.UNAVAILABLE) return this.availabilityResult(product, false);
+      const stillConfirmed = product.availabilityValidUntil && new Date(product.availabilityValidUntil).getTime() > now.getTime();
+      if (stillConfirmed) {
+        set = { status: ProductStatus.PUBLISHED, availabilityStatus: ProductAvailabilityStatus.AVAILABLE, customerAvailabilityNote: 'Available from a verified Hook Market.' };
+        unset = { availabilityCheckRequestedAt: 1, availabilityCheckRequestedBy: 1, availabilityCheckNote: 1, availabilityCheckDueAt: 1 };
+      } else {
+        // Its market confirmation ran out while it was away, so a Market Associate has to confirm it before customers see it.
+        needsConfirmation = true;
+        set = {
+          status: ProductStatus.AVAILABILITY_UNCONFIRMED,
+          availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED,
+          availabilityPreviousStatus: ProductStatus.PUBLISHED,
+          availabilityCheckRequestedAt: now,
+          availabilityCheckRequestedBy: accountId,
+          availabilityCheckNote: 'The vendor says this is back in stock. Confirm on the market before it goes back on sale.',
+          customerAvailabilityNote: 'Temporarily unavailable while availability is being confirmed.',
+        };
+      }
+    }
+
+    const updated: any = await Product.findOneAndUpdate(
+      { _id: product._id, status: product.status },
+      { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}), $inc: { catalogVersion: 1 } },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product changed a moment ago. Refresh and try again.', undefined, 'STALE_VERSION');
+
+    this.broadcastChange(updated);
+
+    if (wantsOut || needsConfirmation) {
+      await notifyStaffByPermission({
+        permission: 'catalog.availability.manage',
+        stateId: updated.sourceStateId,
+        eventKeyPrefix: `product:${updated.publicId}:vendor-stock:${now.getTime()}`,
+        title: wantsOut ? 'Product marked out of stock' : 'Product back in stock, needs a recheck',
+        body: `${updated.title || 'A product'} from ${vendor.businessName || 'a vendor'} ${wantsOut ? 'was marked out of stock' : 'was marked back in stock'}. Recheck it on the market.`,
+        type: 'order_updated',
+        data: { productId: updated.publicId, href: `/dashboard/products/${updated.publicId}` },
+      }).catch((error) => console.warn('[vendor] stock notification failed', error instanceof Error ? error.message : error));
+    }
+    return this.availabilityResult(updated, needsConfirmation);
+  }
+
+  /** Everything that shows this product refreshes now: the customer app's lists, home and product page, and the admin screens. */
+  private broadcastChange(updated: any) {
+    const event = { entityId: updated.publicId, version: Number(updated.catalogVersion || 1), scope: updated.sourceStateId ? { stateId: String(updated.sourceStateId) } : undefined };
+    publishRealtime({ type: 'catalog.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'home.updated', entityType: 'product', ...event }, { public: true, admin: true });
+    publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
+    // A product that left sale takes its negotiations and locked prices with it, and customers' carts are re-checked.
+    reconcileProductInBackground(updated._id?.toString());
+    adminProductStatsCache.clear();
+  }
+
+  /**
+   * The vendor says a product they own is still available, which renews its availability window. This is how a product
+   * that reached the end of its window (and was hidden while it waited for a recheck) comes back without waiting for a
+   * visit, and how a live one is kept on sale. It only applies to a product that was already live: one that never was has
+   * to go through Hook first.
+   */
+  async confirmAvailability(accountId: string, productIdentifier: string) {
+    const vendor = await vendorFor(accountId);
+    const product: any = await Product.findOne({
+      $or: [{ publicId: productIdentifier }, { hookId: productIdentifier }],
+      sourceMarketVendorId: vendor._id.toString(),
+      deletedAt: { $exists: false },
+    });
+    if (!product) throw new HttpError(404, 'Product not found', undefined, 'NOT_FOUND');
+    const waiting = product.status === ProductStatus.AVAILABILITY_UNCONFIRMED && product.availabilityPreviousStatus === ProductStatus.PUBLISHED && product.commercialApproval?.approved === true;
+    if (!waiting && product.status !== ProductStatus.PUBLISHED) {
+      throw new HttpError(409, 'This product is not waiting for your confirmation', undefined, 'INVALID_STATE_TRANSITION');
+    }
+
+    const now = new Date();
+    const updated: any = await Product.findOneAndUpdate(
+      { _id: product._id, status: product.status },
+      {
+        $set: {
+          status: ProductStatus.PUBLISHED,
+          availabilityStatus: ProductAvailabilityStatus.AVAILABLE,
+          lastAvailabilityConfirmedAt: now,
+          availabilityValidUntil: await availabilityValidUntil(now),
+          availabilityCheckNote: 'Confirmed available by the vendor.',
+          customerAvailabilityNote: 'Available from a verified Hook Market.',
+        },
+        $unset: { availabilityPreviousStatus: 1, availabilityCheckDueAt: 1, availabilityEscalatedAt: 1, availabilityCheckRequestedAt: 1, availabilityCheckRequestedBy: 1 },
+        $inc: { catalogVersion: 1 },
+      },
+      { returnDocument: 'after' },
+    ).lean({ virtuals: true });
+    if (!updated) throw new HttpError(409, 'This product changed a moment ago. Refresh and try again.', undefined, 'STALE_VERSION');
+    this.broadcastChange(updated);
+    return this.availabilityResult(updated, false);
+  }
+
+  private availabilityResult(product: any, needsConfirmation: boolean) {
+    return {
+      publicId: product.publicId,
+      status: product.status,
+      availabilityStatus: product.availabilityStatus,
+      outOfStock: product.status === ProductStatus.SOLD_OUT,
+      needsConfirmation,
+    };
+  }
+}

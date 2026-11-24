@@ -163,13 +163,30 @@ async function ensureZone(id: string, stateId: string, cityId: string) {
   return zone;
 }
 
+/**
+ * Every record still carries a City internally, but admins no longer pick one: a State's default City is its first
+ * active City, created on demand from the State's capital so the State alone is enough to place a market or hub.
+ */
+async function defaultCityFor(state: any) {
+  const stateId = state._id.toString();
+  const existing = await OperationCity.findOne({ stateId, status: 'active' }).sort({ createdAt: 1 });
+  if (existing) return existing;
+  return OperationCity.create({
+    publicId: await nextPublicId('city'),
+    stateId,
+    name: state.capitalName || state.name,
+    code: String(state.code || state.name).slice(0, 12).toUpperCase(),
+    status: 'active',
+  });
+}
+
 async function resolveLocation(input: {
   stateId: string;
-  cityId: string;
+  cityId?: string;
   zoneId?: string;
 }, active = true) {
   const state = await ensureState(input.stateId, active);
-  const city = await ensureCity(input.cityId, state._id.toString(), active);
+  const city = input.cityId ? await ensureCity(input.cityId, state._id.toString(), active) : await defaultCityFor(state);
   const zone = input.zoneId
     ? await ensureZone(input.zoneId, state._id.toString(), city._id.toString())
     : undefined;
@@ -1026,7 +1043,7 @@ export class PlatformController {
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, market.stateId, market.hubId);
     const location = await resolveLocation({
       stateId: req.body.stateId || market.stateId,
-      cityId: req.body.cityId || market.cityId,
+      cityId: req.body.cityId || (req.body.stateId && req.body.stateId !== market.stateId ? undefined : market.cityId),
       zoneId: req.body.zoneId || market.zoneId,
     });
     const operatingState = await OperationState.findById(location.ids.stateId).select('operationsEnabled').lean();
@@ -1087,7 +1104,7 @@ export class PlatformController {
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, hub.stateId, hub._id.toString());
     const location = await resolveLocation({
       stateId: req.body.stateId || hub.stateId,
-      cityId: req.body.cityId || hub.cityId,
+      cityId: req.body.cityId || (req.body.stateId && req.body.stateId !== hub.stateId ? undefined : hub.cityId),
     });
     assertScope(context, location.ids.stateId, hub._id.toString());
     // `!== undefined`, not truthiness: an empty array must clear the hub's links, not be treated as "omitted".
@@ -1224,6 +1241,10 @@ export class PlatformController {
   };
   createPartner = async (req: Request, res: Response) => {
     const context = await access(req, 'partners.manage');
+    if (!req.body.cityId && req.body.marketId) {
+      const chosen = await byIdentifier(Market, req.body.marketId);
+      req.body.cityId = chosen.cityId;
+    }
     const location = await resolveLocation(req.body);
     assertScope(context, location.ids.stateId);
     if (req.body.marketId) {
@@ -1262,7 +1283,7 @@ export class PlatformController {
     const context = await resolveAccessContext(req.user!.sub); assertScope(context, partner.stateId);
     const location = await resolveLocation({
       stateId: req.body.stateId || partner.stateId,
-      cityId: req.body.cityId || partner.cityId,
+      cityId: req.body.cityId || (req.body.stateId && req.body.stateId !== partner.stateId ? undefined : partner.cityId),
       zoneId: req.body.zoneId || partner.zoneId,
     });
     assertScope(context, location.ids.stateId);

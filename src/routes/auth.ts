@@ -1,3 +1,4 @@
+import { authLimiter, sessionLimiter } from '@middleware/security';
 import { Router } from 'express';
 import { z } from 'zod';
 import { AuthController } from '@controllers/auth.controller';
@@ -64,16 +65,16 @@ export function createAuthRouter() {
   const router = Router();
   const controller = new AuthController();
 
-  router.post('/lookup', validateBody(lookupSchema), asyncHandler(controller.lookup));
-  router.post('/signup/start', validateBody(signupStartSchema), asyncHandler(controller.startSignup));
-  router.post('/signup/verify', validateBody(signupVerifySchema), asyncHandler(controller.verifySignup));
-  router.post('/signup/resend', validateBody(z.object({ signupSessionToken: z.string().min(32) })), asyncHandler(controller.resendSignupCode));
-  router.post('/signup/complete', validateBody(signupCompleteSchema), asyncHandler(controller.completeSignup));
-  router.post('/register', validateBody(registerSchema), asyncHandler(controller.register));
-  router.post('/login', validateBody(loginSchema), asyncHandler(controller.login));
-  router.post('/google', validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
-  router.post('/apple', validateBody(appleAuthSchema), asyncHandler(controller.appleLogin));
-  router.post('/invitations/accept', validateBody(z.object({
+  router.post('/lookup', authLimiter, validateBody(lookupSchema), asyncHandler(controller.lookup));
+  router.post('/signup/start', authLimiter, validateBody(signupStartSchema), asyncHandler(controller.startSignup));
+  router.post('/signup/verify', authLimiter, validateBody(signupVerifySchema), asyncHandler(controller.verifySignup));
+  router.post('/signup/resend', authLimiter, validateBody(z.object({ signupSessionToken: z.string().min(32) })), asyncHandler(controller.resendSignupCode));
+  router.post('/signup/complete', authLimiter, validateBody(signupCompleteSchema), asyncHandler(controller.completeSignup));
+  router.post('/register', authLimiter, validateBody(registerSchema), asyncHandler(controller.register));
+  router.post('/login', authLimiter, validateBody(loginSchema), asyncHandler(controller.login));
+  router.post('/google', authLimiter, validateBody(googleAuthSchema), asyncHandler(controller.googleLogin));
+  router.post('/apple', authLimiter, validateBody(appleAuthSchema), asyncHandler(controller.appleLogin));
+  router.post('/invitations/accept', authLimiter, validateBody(z.object({
     token: z.string().min(32),
     password: z.string().min(9).max(128),
   })), asyncHandler(async (req, res) => {
@@ -84,16 +85,17 @@ export function createAuthRouter() {
     });
     sendSuccess(res, result);
   }));
-  router.post('/verify-otp', validateBody(otpSchema), asyncHandler(controller.verifyOtp));
-  router.post('/refresh', validateBody(refreshSchema), asyncHandler(controller.refresh));
-  router.post('/logout', validateBody(logoutSchema), asyncHandler(controller.logout));
-  router.post('/password/forgot', validateBody(passwordResetRequestSchema), asyncHandler(controller.requestPasswordReset));
-  router.post('/password/verify', validateBody(passwordVerifySchema), asyncHandler(controller.verifyPasswordReset));
-  router.post('/password/reset', validateBody(passwordResetSchema), asyncHandler(controller.resetPassword));
-  router.get('/profile', requireAuth, asyncHandler(controller.profile));
-  router.patch('/profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.updateProfile));
-  router.post('/complete-profile', requireAuth, validateBody(profileSchema), asyncHandler(controller.completeProfile));
-  router.post('/password/change', requireAuth, validateBody(changePasswordSchema), asyncHandler(controller.changePassword));
+  router.post('/verify-otp', authLimiter, validateBody(otpSchema), asyncHandler(controller.verifyOtp));
+  router.post('/refresh', sessionLimiter, validateBody(refreshSchema), asyncHandler(controller.refresh));
+  router.post('/logout', sessionLimiter, validateBody(logoutSchema), asyncHandler(controller.logout));
+  router.post('/password/forgot', authLimiter, validateBody(passwordResetRequestSchema), asyncHandler(controller.requestPasswordReset));
+  router.post('/password/verify', authLimiter, validateBody(passwordVerifySchema), asyncHandler(controller.verifyPasswordReset));
+  router.post('/password/reset', authLimiter, validateBody(passwordResetSchema), asyncHandler(controller.resetPassword));
+  router.get('/profile', requireAuth, sessionLimiter, asyncHandler(controller.profile));
+  router.patch('/profile', requireAuth, sessionLimiter, validateBody(profileSchema), asyncHandler(controller.updateProfile));
+  router.post('/complete-profile', requireAuth, sessionLimiter, validateBody(profileSchema), asyncHandler(controller.completeProfile));
+  router.post('/password/keep-default', requireAuth, sessionLimiter, asyncHandler(controller.keepDefaultPassword));
+  router.post('/password/change', authLimiter, requireAuth, validateBody(changePasswordSchema), asyncHandler(controller.changePassword));
 
   return router;
 }

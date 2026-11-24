@@ -417,6 +417,7 @@ export class NegotiationService {
         currency: session.currency,
         previousCustomerOfferMinor,
         previousCounterPriceMinor: priorCounterPrice,
+        variationSeed: session.publicId,
       })
       // The price dropped to (or below) the minimum mid-session: the list price is the best price on offer.
       : { decision: 'ACCEPT', acceptedPriceMinor: inputs.sellingPriceMinor, reasonCode: 'LIST_PRICE_AT_FLOOR', remainingOffers: 0 };

@@ -30,6 +30,11 @@ export interface MarketVendor extends BaseEntity {
   paymentProfile?: VendorPaymentProfile;
   status: MarketVendorStatus;
   consentAt?: Date;
+  /** The vendor's own login (a User with accountType vendor). */
+  accountId?: string;
+  verifiedAt?: Date;
+  description?: string;
+  imageUrl?: string;
   invitedByMarketAssociateId?: string;
   lastContactedAt?: Date;
   notes?: string;
@@ -112,6 +117,10 @@ const vendorSchema = createSchema<MarketVendor>({
   paymentProfile: { type: paymentProfile },
   status: { type: String, enum: ['pending', 'active', 'inactive', 'blocked'], default: 'pending', index: true },
   consentAt: { type: Date },
+  accountId: { type: String, unique: true, sparse: true, index: true },
+  verifiedAt: { type: Date },
+  description: { type: String, trim: true, maxlength: 600 },
+  imageUrl: { type: String, trim: true },
   invitedByMarketAssociateId: { type: String, index: true },
   lastContactedAt: { type: Date },
   notes: { type: String, maxlength: 1000 },

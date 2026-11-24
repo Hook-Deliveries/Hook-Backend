@@ -107,14 +107,34 @@ test('clampToLive pulls stored prices inside the live band and ignores zero', ()
 const engine = new PricingEngine();
 const base = { sellingPriceMinor: 5_000_000, minimumNegotiablePriceMinor: 4_000_000, maximumDiscountMinor: 1_000_000, maximumOffers: 3, currency: 'NGN' };
 
-test('engine: counters early, accepts at the round boundary, declines a low final offer', () => {
-  // Round thresholds: 4,666,667 -> 4,333,334 -> 4,000,000 (floor on the last round).
+test('engine: counters early, accepts at the round boundary, and never declines a low final offer', () => {
+  // Round prices: 4,666,667 -> 4,333,334 -> 4,000,000 (the lowest Hook accepts, on the last round).
   const first = engine.decide({ ...base, customerOfferMinor: 4_000_000, offerNumber: 1 });
   assert.equal(first.decision, 'COUNTER');
-  assert.equal(first.counterPriceMinor, 4_666_667);
+  // The counter is this round's price plus a small cushion, in whole ₦100, never above the list price.
+  assert.ok(first.counterPriceMinor! >= 4_666_667 && first.counterPriceMinor! < 5_000_000 && first.counterPriceMinor! % 10_000 === 0);
   assert.equal(engine.decide({ ...base, customerOfferMinor: 4_700_000, offerNumber: 1 }).decision, 'ACCEPT');
-  assert.equal(engine.decide({ ...base, customerOfferMinor: 3_999_999, offerNumber: 3 }).decision, 'DECLINE');
+  // Below the lowest price on the last round: no refusal, a counter that is still above the lowest price.
+  const lowFinal = engine.decide({ ...base, customerOfferMinor: 3_999_999, offerNumber: 3 });
+  assert.equal(lowFinal.decision, 'COUNTER');
+  assert.ok(lowFinal.counterPriceMinor! > 4_000_000 && lowFinal.counterPriceMinor! < 5_000_000);
+  assert.equal(lowFinal.remainingOffers, 0);
   assert.equal(engine.decide({ ...base, customerOfferMinor: 4_000_000, offerNumber: 3 }).decision, 'ACCEPT');
+});
+
+test('engine: the counter is smart, not the lowest price: it varies by negotiation, never rises, and is repeatable', () => {
+  const offer = { ...base, customerOfferMinor: 3_500_000, offerNumber: 3, maximumOffers: 3 };
+  const seeds = Array.from({ length: 24 }, (_, index) => engine.decide({ ...offer, variationSeed: `neg-${index}` }).counterPriceMinor!);
+  assert.ok(seeds.every((price) => price > 4_000_000 && price <= 5_000_000), 'always above the lowest price');
+  assert.ok(new Set(seeds).size > 3, 'different negotiations get different prices');
+  assert.equal(engine.decide({ ...offer, variationSeed: 'neg-7' }).counterPriceMinor, seeds[7], 'the same offer in the same negotiation is answered the same way');
+  // Never above the previous counter.
+  const capped = engine.decide({ ...offer, variationSeed: 'neg-3', previousCounterPriceMinor: 4_050_000 });
+  assert.ok(capped.counterPriceMinor! <= 4_050_000 && capped.counterPriceMinor! >= 4_000_000);
+  // A near offer gets a nearer price than a very low one.
+  const near = engine.decide({ ...base, maximumOffers: 1, customerOfferMinor: 3_990_000, offerNumber: 1, variationSeed: 'same' }).counterPriceMinor!;
+  const far = engine.decide({ ...base, maximumOffers: 1, customerOfferMinor: 2_600_000, offerNumber: 1, variationSeed: 'same' }).counterPriceMinor!;
+  assert.ok(near <= far, `near ${near} should not exceed far ${far}`);
 });
 
 test('engine: never accepts above the list price and rejects bad input', () => {
@@ -135,8 +155,10 @@ test('engine: a repeated or lower offer does not move the counter', () => {
   });
   assert.equal(next.decision, 'COUNTER');
   assert.equal(next.counterPriceMinor, 4_666_667);
-  // A repeated offer that already meets the round's price is accepted; one that falls short on the last round is declined.
+  // A repeated offer that already meets the round's price is accepted; one that falls short on the last round gets a counter, not a refusal.
   assert.equal(engine.decide({ ...base, customerOfferMinor: 4_000_000, offerNumber: 3, previousCustomerOfferMinor: 4_000_000 }).decision, 'ACCEPT');
-  const last = engine.decide({ ...base, customerOfferMinor: 3_900_000, offerNumber: 3, previousCustomerOfferMinor: 3_900_000 });
-  assert.equal(last.decision, 'DECLINE');
+  const last = engine.decide({ ...base, customerOfferMinor: 3_900_000, offerNumber: 3, previousCustomerOfferMinor: 3_900_000, previousCounterPriceMinor: 4_333_334 });
+  assert.equal(last.decision, 'COUNTER');
+  assert.equal(last.counterPriceMinor, 4_333_334);
+  assert.equal(last.remainingOffers, 0);
 });

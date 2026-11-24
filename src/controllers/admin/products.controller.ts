@@ -1,7 +1,7 @@
 import { availabilityValidUntil } from '@modules/catalog/availability-window.service';
 import { reconcileProductInBackground } from '@modules/negotiation/negotiation-reconcile.service';
 import { onSaleFilter } from '@lib/product-availability';
-import { notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
+import { announceNewProductInBackground, notifyLikersOfProductChange } from '@modules/notifications/engagement-notifications.service';
 import { Request, Response } from 'express';
 import { ProductAvailabilityStatus, ProductStatus, UserRole } from '@lib/constants';
 import { auditAdminAction } from '@lib/audit';
@@ -20,6 +20,7 @@ import { adminCategoryManagersCache, adminProductStatsCache } from '@lib/ttl-cac
 import { publishRealtime } from '@modules/platform/realtime.service';
 import { CommerceSettings } from '@models/commerce/commerce.model';
 import { defaultNegotiationRules } from '@lib/negotiation-defaults';
+import { syncProductPhotoAssets } from '@modules/catalog/commercial-catalog.service';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'product';
@@ -73,6 +74,8 @@ function publishProductUpdate(product: any) {
   publishRealtime({ type: 'admin.dashboard.updated', ...event }, { admin: true });
   // Any open negotiation or locked price on this product is re-checked against the change.
   reconcileProductInBackground(product._id?.toString());
+  // Only a product published in the last few minutes is announced; edits to older ones are ignored.
+  if (product.status === ProductStatus.PUBLISHED) announceNewProductInBackground(product.publicId || product._id?.toString());
 }
 
 function assertAdminPublishReady(product: Record<string, any>) {
@@ -173,6 +176,8 @@ export class AdminProductsController {
     if (req.query.availability === 'recheck') {
       where.$and = [...(where.$and || []), { $or: [
         { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        // A vendor marked it out of stock: Hook still has to look at it on the market.
+        { status: ProductStatus.SOLD_OUT },
         { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
       ] }];
     }
@@ -285,6 +290,13 @@ export class AdminProductsController {
     const { category, market } = await activeCatalogRelations(req.body.categoryId, req.body.marketId);
     const body = { ...req.body };
     delete body.vendorId;
+    // The vendor who owns it must belong to this Market and be able to sign in, or they could never see or run the product.
+    const sourceMarketVendorId = await resolveSourceVendor(body.sourceMarketVendorId, market._id.toString());
+    delete body.sourceMarketVendorId;
+    if (sourceMarketVendorId) {
+      const owner: any = await MarketVendor.findById(sourceMarketVendorId).select('status').lean();
+      if (owner?.status !== 'active') throw new HttpError(409, 'This vendor is not active. Choose an active vendor.', undefined, 'CONFLICT');
+    }
     // Both identifiers come from the same reserved sequence: publicId is the durable internal key, hookId the human-facing alias.
     const productPublicId = await nextPublicId('product');
     const isPublished = body.status === ProductStatus.PUBLISHED;
@@ -317,6 +329,7 @@ export class AdminProductsController {
         commercialApproval: { approved: true, approvedBy: req.user!.sub, approvedAt: now },
       } : {}),
       source: 'admin',
+      ...(sourceMarketVendorId ? { sourceMarketVendorId } : {}),
       slug: `${slugify(req.body.title)}-${productPublicId.toLowerCase()}`,
       publicId: productPublicId,
       hookId: hookIdFromPublicId(productPublicId),
@@ -390,14 +403,23 @@ export class AdminProductsController {
         commercialApproval: { approved: true, approvedBy: req.user!.sub, approvedAt: now },
       });
     }
+    // The gallery decides what customers see and in what order, so the uploaded-photo list follows it.
+    if (Array.isArray(updates.images) && Array.isArray(product.mediaAssetIds) && product.mediaAssetIds.length) {
+      updates.mediaAssetIds = await syncProductPhotoAssets(product.mediaAssetIds, updates.images);
+    }
     updates.catalogVersion = Number(product.catalogVersion || 1) + 1;
     const priceFieldsChanged = (['costPrice', 'sellingPrice', 'discountedPrice', 'minAcceptablePrice'] as const)
       .some((key) => updates[key] !== undefined && Number(updates[key]) !== Number(product[key] ?? undefined));
     if (priceFieldsChanged && !String(req.body.reason || '').trim())
       throw new HttpError(400, 'A reason is required when changing product pricing', undefined, 'VALIDATION_ERROR');
     const before = { quantity: product.quantity, sellingPriceMinor: product.sellingPriceMinor };
+    const titleBefore = product.title;
     Object.assign(product, updates);
-    if (req.body.title && !req.body.slug) product.slug = `${slugify(req.body.title)}-${Date.now().toString().slice(-6)}`;
+    // The link follows the name only when the name really changed, and always keeps the product's id on the end, so a
+    // saved or shared link to an earlier version of the name still finds it. Re-saving the same title changes nothing.
+    if (req.body.title && !req.body.slug && String(req.body.title).trim() !== String(titleBefore || '').trim()) {
+      product.slug = `${slugify(req.body.title)}-${String(product.publicId || product.id).toLowerCase()}`;
+    }
     await products.save(product);
     await auditAdminAction(req, 'product.update', 'product', product.id, { fields: Object.keys(req.body), reason: req.body.reason });
     publishProductUpdate(product);
@@ -468,16 +490,18 @@ export class AdminProductsController {
     if (cached) return cached;
     const products = adminRepos.products();
     const now = new Date();
-    const [total, approved, pendingApproval, needsRecheck, unavailable] = await Promise.all([
+    const [total, active, pendingApproval, needsRecheck, unavailable] = await Promise.all([
       products.count(),
-      products.count({ where: { status: ProductStatus.APPROVED } }),
+      // Live products are `published`; `approved` is the older word for the same thing.
+      products.model.countDocuments({ deletedAt: { $exists: false }, status: { $in: [ProductStatus.PUBLISHED, ProductStatus.APPROVED] } }),
       products.count({ where: { status: ProductStatus.PENDING_APPROVAL } }),
       products.model.countDocuments({ deletedAt: { $exists: false }, $or: [
         { availabilityStatus: ProductAvailabilityStatus.UNCONFIRMED },
+        { status: ProductStatus.SOLD_OUT },
         { status: ProductStatus.PUBLISHED, availabilityValidUntil: { $lte: now } },
       ] }),
       products.model.countDocuments({ deletedAt: { $exists: false }, availabilityStatus: ProductAvailabilityStatus.UNAVAILABLE }),
     ]);
-    return adminProductStatsCache.set('summary', { total, approved, pendingApproval, needsRecheck, unavailable });
+    return adminProductStatsCache.set('summary', { total, active, approved: active, pendingApproval, needsRecheck, unavailable });
   }
 }

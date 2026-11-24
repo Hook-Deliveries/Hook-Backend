@@ -16,6 +16,7 @@ export enum AccountType {
   STAFF = 'staff',
   MARKETASSOCIATE = 'marketassociate',
   PARTNER = 'partner',
+  VENDOR = 'vendor',
 }
 
 export enum AccountStatus {

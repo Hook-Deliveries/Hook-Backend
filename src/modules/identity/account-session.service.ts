@@ -23,7 +23,7 @@ function refreshExpiry() {
   return new Date(Date.now() + amount * unit);
 }
 
-export async function presentAccountUser(user: User) {
+export async function presentAccountUser(user: User, options: { defaultPasswordKept?: boolean } = {}) {
   const accountId = (user as any)._id?.toString?.() || user.id;
   const base = {
     id: accountId,
@@ -37,6 +37,8 @@ export async function presentAccountUser(user: User) {
     accountStatus: user.accountStatus,
     avatarUrl: user.avatarUrl,
     isEmailVerified: user.isEmailVerified,
+    // Present only when set, so every existing account payload stays byte-for-byte the same.
+    ...(user.mustChangePassword ? { mustChangePassword: true, ...(options.defaultPasswordKept ? { defaultPasswordKept: true } : {}) } : {}),
   };
   if (user.accountType !== AccountType.STAFF) return base;
   const context = await resolveAccessContext(accountId);
@@ -138,7 +140,7 @@ export async function rotateAccountSession(refreshToken: string) {
     accessToken,
     accessExpiresAt: new Date((jwt.decode(accessToken) as jwt.JwtPayload).exp! * 1000).toISOString(),
     refreshToken: nextRefresh,
-    user: await presentAccountUser(user),
+    user: await presentAccountUser(user, { defaultPasswordKept: Boolean(session.defaultPasswordKeptAt) }),
   };
 }
 
