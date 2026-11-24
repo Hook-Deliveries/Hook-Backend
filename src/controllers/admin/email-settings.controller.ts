@@ -22,6 +22,7 @@ export class AdminEmailSettingsController {
       hookOpsEmail: settings?.hookOpsEmail || "",
       appName: settings?.appName || "",
       appUrl: settings?.appUrl || "",
+      portalUrl: settings?.portalUrl || "",
       supportUrl: settings?.supportUrl || "",
       // Read-only: sender identity is env-configured only (BREVO_FROM_EMAIL / BREVO_FROM_NAME).
       brevoFromEmail: resolved.brevoFromEmail || "",
@@ -50,6 +51,7 @@ export class AdminEmailSettingsController {
       hookOpsEmail: updated?.hookOpsEmail || "",
       appName: updated?.appName || "",
       appUrl: updated?.appUrl || "",
+      portalUrl: updated?.portalUrl || "",
       supportUrl: updated?.supportUrl || "",
       brevoFromEmail: resolved.brevoFromEmail || "",
       brevoFromName: resolved.brevoFromName,

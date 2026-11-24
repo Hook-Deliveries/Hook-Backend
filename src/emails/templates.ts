@@ -46,9 +46,9 @@ function readTemplateFile(fileName: string) {
 const emailStyles = readTemplateFile('base.css');
 
 /** Set once per send by EmailService from the DB-backed Email Configuration settings, kept as a module variable so baseValues() stays synchronous. */
-let resolvedEmailSettings: { appName?: string; appUrl?: string; supportEmail?: string } = {};
+let resolvedEmailSettings: { appName?: string; appUrl?: string; portalUrl?: string; supportEmail?: string } = {};
 
-export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; supportEmail?: string }) {
+export function setResolvedEmailSettings(values: { appName?: string; appUrl?: string; portalUrl?: string; supportEmail?: string }) {
   resolvedEmailSettings = values;
 }
 
@@ -118,10 +118,15 @@ function deliveryBlockHtml(payload: { deliveryAddress?: string; expectedDelivery
   return `<div class="dark-block"><div class="dark-cols">${columns}</div><p style="text-align:center"><a class="button button-light" href="${escapeHtml(payload.appUrl)}">Track your order</a></p></div>`;
 }
 
+function portalBase() {
+  return resolvedEmailSettings.portalUrl || process.env.ADMIN_APP_URL || resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000';
+}
+
 function baseValues(values: Record<string, unknown> = {}) {
   return {
     appName: resolvedEmailSettings.appName || process.env.APP_NAME || 'Hook',
     appUrl: resolvedEmailSettings.appUrl || process.env.APP_URL || 'http://localhost:3000',
+    portalUrl: portalBase(),
     supportEmail: resolvedEmailSettings.supportEmail || process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
     year: new Date().getFullYear(),
     ...values,
@@ -258,7 +263,7 @@ export function vendorNewOrderEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       amount: money(payload.amount),
       itemCount: payload.itemCount || 0,
-      dashboardUrl: payload.dashboardUrl || `${process.env.APP_URL || 'http://localhost:3000'}/dashboard/orders`,
+      dashboardUrl: payload.dashboardUrl || `${portalBase()}/dashboard/orders`,
     })),
     text: `New Hook order ${payload.orderCode} for ${money(payload.amount)}.`,
   };
@@ -273,7 +278,7 @@ export function hookNewOrderEmailTemplate(payload: OrderEmailPayload) {
       orderCode: payload.orderCode,
       amount: money(payload.amount),
       itemCount: payload.itemCount || 0,
-      dashboardUrl: payload.dashboardUrl || `${process.env.APP_URL || 'http://localhost:3000'}/dashboard/orders`,
+      dashboardUrl: payload.dashboardUrl || `${portalBase()}/dashboard/orders`,
     })),
     text: `New marketplace order ${payload.orderCode} for ${money(payload.amount)}.`,
   };

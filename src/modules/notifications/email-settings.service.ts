@@ -8,6 +8,7 @@ export type ResolvedEmailSettings = {
   brevoFromName: string;
   appName: string;
   appUrl: string;
+  portalUrl: string;
   supportUrl: string;
   helpCenterUrl: string;
 };
@@ -21,6 +22,7 @@ export async function getEmailSettings(): Promise<ResolvedEmailSettings> {
 
   const doc = await EmailSettings.findOne({ key: 'email' }).lean();
   const appUrl = (doc?.appUrl || process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  const portalUrl = (doc?.portalUrl || process.env.ADMIN_APP_URL || doc?.appUrl || process.env.APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
   const resolved: ResolvedEmailSettings = {
     supportEmail: doc?.supportEmail || process.env.SUPPORT_EMAIL || process.env.BREVO_FROM_EMAIL || 'support@hook.africa',
     hookOpsEmail: doc?.hookOpsEmail || process.env.HOOK_OPS_EMAIL || process.env.BREVO_FROM_EMAIL || 'ops@hook.africa',
@@ -29,10 +31,11 @@ export async function getEmailSettings(): Promise<ResolvedEmailSettings> {
     brevoFromName: process.env.BREVO_FROM_NAME || 'Hook',
     appName: doc?.appName || process.env.APP_NAME || 'Hook',
     appUrl,
+    portalUrl,
     // Our own help center by default; an admin can point this at an external one instead.
-    supportUrl: doc?.supportUrl || process.env.SUPPORT_URL || `${appUrl}/help`,
+    supportUrl: doc?.supportUrl || process.env.SUPPORT_URL || `${portalUrl}/help`,
     // Always our own page — order-context deep links rely on its query params staying stable.
-    helpCenterUrl: `${appUrl}/help`,
+    helpCenterUrl: `${portalUrl}/help`,
   };
   emailSettingsCache.set(CACHE_KEY, resolved);
   return resolved;
@@ -42,15 +45,14 @@ export function clearEmailSettingsCache() {
   emailSettingsCache.clear();
 }
 
-// Base URL emails link back to; Admin > Settings > Email wins over env vars.
+// Base URL for the Hook portal (admin, Market Associate, vendor): sign-in, activation and
+// dashboard links. Admin > Settings > Email wins over env vars.
 export async function adminAppBaseUrl(): Promise<string> {
-  const doc = await EmailSettings.findOne({ key: 'email' }).select('appUrl').lean();
-  const url = doc?.appUrl?.trim() || process.env.ADMIN_APP_URL || process.env.PUBLIC_WEB_URL || process.env.APP_URL || 'http://localhost:3000';
-  return url.replace(/\/+$/, '');
+  return (await getEmailSettings()).portalUrl;
 }
 
-// Base URL for links people open on the public Hook web app (e.g. account
-// activation). PUBLIC_WEB_URL wins; falls back to the admin/email base URL.
+// Base URL for links people open to set up or activate an account. Those pages live on the
+// portal; PUBLIC_WEB_URL overrides it when set.
 export async function publicWebBaseUrl(): Promise<string> {
   const configured = process.env.PUBLIC_WEB_URL?.trim();
   if (configured && /^https?:\/\//i.test(configured)) return configured.replace(/\/+$/, '');
