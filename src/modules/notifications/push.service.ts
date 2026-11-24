@@ -211,8 +211,6 @@ export async function sendPushToUser(userId: string, content: Omit<PushMessage, 
 }
 
 const vapidConfigured = () => Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
-export const webPushPublicKey = () => pushEnabled() && vapidConfigured() ? process.env.VAPID_PUBLIC_KEY! : null;
-
 let vapidSet = false;
 function ensureVapid() {
   if (vapidSet || !vapidConfigured()) return;
