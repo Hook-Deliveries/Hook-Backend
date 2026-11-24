@@ -5,7 +5,10 @@ export interface EmailSettings extends BaseEntity {
   supportEmail?: string;
   hookOpsEmail?: string;
   appName?: string;
+  /** Customer site (the shop): where customer email buttons point. */
   appUrl?: string;
+  /** Hook portal (admin, Market Associate, vendor): sign-in, activation and dashboard links. */
+  portalUrl?: string;
   // Where "Help & Support" opens across every client (app, Market Associate portal, Partner portal).
   supportUrl?: string;
   updatedBy?: string;
@@ -17,6 +20,7 @@ const emailSettingsSchema = createSchema<EmailSettings>({
   hookOpsEmail: { type: String },
   appName: { type: String },
   appUrl: { type: String },
+  portalUrl: { type: String },
   supportUrl: { type: String },
   updatedBy: { type: String },
 });

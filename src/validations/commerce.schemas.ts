@@ -128,6 +128,7 @@ export const emailSettingsSchema = z.object({
   hookOpsEmail: z.string().trim().email().optional(),
   appName: z.string().trim().min(1).max(80).optional(),
   appUrl: z.string().trim().url().optional(),
+  portalUrl: z.string().trim().url().optional(),
   // Where "Help & Support" opens; falls back to a mailto: to supportEmail when unset.
   supportUrl: z.string().trim().url().optional(),
   reason: z.string().trim().min(5).max(500),
