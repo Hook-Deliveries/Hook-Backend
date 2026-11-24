@@ -2,7 +2,7 @@ import { Notification } from '@models/notifications/notification.model';
 import { User } from '@models/users/user.model';
 import { definitionFor, renderNotification, type NotificationGroup } from '../../notifications/catalog';
 import { publishRealtime } from '@modules/platform';
-import { sendPushToUser } from '@modules/notifications/push.service';
+import { notifyPush } from '@modules/notifications/push.service';
 
 export interface NotificationPreferences {
   groups: Record<NotificationGroup, boolean>;
@@ -105,7 +105,7 @@ export async function dispatchNotification(input: {
 
   const notification = created.value as { _id: { toString(): string } };
   publishRealtime({ type: 'notification.created', entityId: input.eventKey, version: 1 }, { accountId: input.userId });
-  await sendPushToUser(input.userId, {
+  await notifyPush(input.userId, {
     title,
     body,
     data: { type: input.type, group: definition.group, screen: definition.screen, params: { ...(input.params || {}), ...(input.data || {}) }, notificationId: notification._id.toString() },

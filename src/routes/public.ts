@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { FulfilmentController } from '@controllers/fulfilment.controller';
 import { PublicController } from '@controllers/public.controller';
-import { asyncHandler } from '@utils/http';
+import { asyncHandler, sendSuccess } from '@utils/http';
+import { webPushPublicKey } from '@modules/notifications/push.service';
 import { validateBody } from '@middleware/validate';
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { PaymentLinkController } from '@controllers/payment-link.controller';
@@ -35,6 +36,7 @@ export function createPublicRouter() {
   const paymentLinks = new PaymentLinkController();
   const fulfilment = new FulfilmentController();
   router.get('/public/app-release', asyncHandler(new AppReleasesController().publicPolicy));
+  router.get('/public/web-push-key', (_req, res) => sendSuccess(res, { publicKey: webPushPublicKey() }));
 
   router.post('/public/waitlist', waitlistByIp, validateBody(waitlistJoinSchema), asyncHandler(controller.joinWaitlist));
   router.get('/public/waitlist/unsubscribe/:token', asyncHandler(controller.unsubscribeWaitlist));
