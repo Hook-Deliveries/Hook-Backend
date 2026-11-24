@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { FulfilmentController } from '@controllers/fulfilment.controller';
 import { PublicController } from '@controllers/public.controller';
-import { asyncHandler } from '@utils/http';
+import { asyncHandler, sendSuccess } from '@utils/http';
+import { webPushPublicKey } from '@modules/notifications/push.service';
 import { validateBody } from '@middleware/validate';
 import { MarketAssociateMarketVendorController } from '@controllers/market-vendor.controller';
 import { PaymentLinkController } from '@controllers/payment-link.controller';
@@ -41,7 +42,7 @@ export function createPublicRouter() {
   router.get('/public/legal/:type', asyncHandler(controller.getLegalContent));
   router.get('/public/credit-config', asyncHandler(controller.creditConfig));
   // The public half of the server's Web Push key, so browsers subscribe with the key that matches what the API signs with.
-  router.get('/public/web-push-key', (_req, res) => res.json({ success: true, data: { publicKey: process.env.VAPID_PUBLIC_KEY || null } }));
+  router.get('/public/web-push-key', (_req, res) => sendSuccess(res, { publicKey: webPushPublicKey() }));
   router.get('/public/support', asyncHandler(controller.support));
   router.get('/public/faqs', asyncHandler(controller.faqs));
   router.get('/public/parcels/:receipt', rateLimit('parcel-tracking', { windowMs: 60_000, max: 30, message: 'Too many lookups. Please wait a moment.' }), asyncHandler(fulfilment.publicParcelTracking));
